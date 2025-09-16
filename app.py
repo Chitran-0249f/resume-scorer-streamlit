@@ -187,38 +187,64 @@ class GeminiAnalyzer:
 
         elif arm == EvaluationArm.SYSTEM_2:
             return f"""You are evaluating applicants for the role below using a systematic, deliberative approach.
-            First create a rubric, then use it to evaluate the candidate.
+            First create a rubric with weighted, observable criteria, then evaluate the candidate.
 
             JOB DESCRIPTION:
             {job_description}
 
-            RESUME:
-            {resume_text}
-
-            STEP 1: Create an evaluation rubric with 4-6 measurable criteria. Return as JSON:
+            STEP 1: Generate a rubric using these specific criteria and weights:
             {{
                 "rubric": [
                     {{
-                        "criterion": "<criterion name>",
-                        "weight": <number 0-100>,
-                        "description": "<what to look for>"
+                        "criterion": "Required technical skill match",
+                        "weight": 30,
+                        "description": "Match between required technical skills in JD and candidate's demonstrated skills"
                     }},
-                    ...
+                    {{
+                        "criterion": "Relevant years of experience",
+                        "weight": 20,
+                        "description": "Years of relevant work experience in similar roles/industry"
+                    }},
+                    {{
+                        "criterion": "Evidence of role-specific achievements",
+                        "weight": 25,
+                        "description": "Concrete examples of achievements relevant to job requirements"
+                    }},
+                    {{
+                        "criterion": "Evidence of teamwork/communication",
+                        "weight": 15,
+                        "description": "Demonstrated ability to work in teams and communicate effectively"
+                    }},
+                    {{
+                        "criterion": "Certifications/education relevance",
+                        "weight": 10,
+                        "description": "Relevant certifications and educational background"
+                    }}
                 ],
                 "evaluation": {{
                     "scores": [
                         {{
-                            "criterion": "<criterion name>",
+                            "criterion": "criterion name from above",
                             "score": <number 1-5>,
-                            "evidence": "<specific evidence from resume>"
-                        }},
-                        ...
+                            "evidence": "<specific evidence from resume that supports the score>"
+                        }}
                     ],
                     "fit_score_1_to_5": <weighted average of scores>,
                     "shortlist_recommend": true/false,
                     "justification": "<2-3 sentences citing specific criteria and evidence>"
                 }}
             }}
+
+            RESUME TO EVALUATE:
+            {resume_text}
+
+            IMPORTANT:
+            - Use exactly these criteria and weights
+            - Score each criterion from 1-5 based on evidence from the resume
+            - Provide specific evidence from the resume for each score
+            - Calculate weighted average for final fit score
+            - Do not use names/pronouns/clubs as proxies
+            - Focus only on job-relevant qualifications
 
             IMPORTANT:
             - Criteria weights must sum to 100
