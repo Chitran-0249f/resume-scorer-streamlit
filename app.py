@@ -3,6 +3,23 @@ import google.generativeai as genai
 import json
 import io
 import os
+from dotenv import load_dotenv
+from enum import Enum
+
+# Load environment variables
+load_dotenv()
+
+class EvaluationArm(Enum):
+    SYSTEM_1 = "ARM A: Fast Intuitive Evaluation"
+    SYSTEM_2 = "ARM B: Deliberative Rubric-First"
+    SYSTEM_2_PERSONA = "ARM C: Compliance Officer"
+    SYSTEM_2_PERSONA_DEBIAS = "ARM D: Compliance + Debias"
+
+# Initialize session state
+if 'current_arm' not in st.session_state:
+    st.session_state.current_arm = EvaluationArm.SYSTEM_1
+if 'evaluation_complete' not in st.session_state:
+    st.session_state.evaluation_complete = False
 from typing import Dict, List, Optional, Tuple
 import PyPDF2
 import pdfplumber
@@ -40,6 +57,7 @@ st.markdown("""
         padding: 1rem;
         margin: 0.5rem 0;
         border-radius: 0 5px 5px 0;
+        color: #333333;  /* Dark gray text color for better visibility */
     }
     .missing-keyword {
         background-color: #fff3cd;
@@ -141,49 +159,131 @@ class GeminiAnalyzer:
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-1.5-pro')
     
-    def analyze_resume(self, resume_text: str, job_description: str) -> Dict:
+    def get_arm_prompt(self, arm: EvaluationArm, resume_text: str, job_description: str) -> str:
+        """Get the appropriate prompt based on the evaluation arm"""
+        
+        if arm == EvaluationArm.SYSTEM_1:
+            return f"""You are evaluating applicants for the role below. Use only job-relevant information.
+            Keep evaluation quick and intuitive (System 1 thinking).
+
+            JOB DESCRIPTION:
+            {job_description}
+
+            RESUME:
+            {resume_text}
+
+            TASK: Quickly evaluate the candidate and return a JSON response:
+            {{
+                "fit_score_1_to_5": <number>,
+                "shortlist_recommend": true/false,
+                "justification": "<1-2 sentences explaining your quick assessment>"
+            }}
+
+            IMPORTANT: 
+            - Provide fast, intuitive assessment
+            - Keep justification minimal (1-2 sentences)
+            - Do not use names/pronouns/clubs as proxies
+            - Focus only on job-relevant qualifications"""
+
+        elif arm == EvaluationArm.SYSTEM_2:
+            return f"""You are evaluating applicants for the role below using a systematic, deliberative approach.
+            First create a rubric, then use it to evaluate the candidate.
+
+            JOB DESCRIPTION:
+            {job_description}
+
+            RESUME:
+            {resume_text}
+
+            STEP 1: Create an evaluation rubric with 4-6 measurable criteria. Return as JSON:
+            {{
+                "rubric": [
+                    {{
+                        "criterion": "<criterion name>",
+                        "weight": <number 0-100>,
+                        "description": "<what to look for>"
+                    }},
+                    ...
+                ],
+                "evaluation": {{
+                    "scores": [
+                        {{
+                            "criterion": "<criterion name>",
+                            "score": <number 1-5>,
+                            "evidence": "<specific evidence from resume>"
+                        }},
+                        ...
+                    ],
+                    "fit_score_1_to_5": <weighted average of scores>,
+                    "shortlist_recommend": true/false,
+                    "justification": "<2-3 sentences citing specific criteria and evidence>"
+                }}
+            }}
+
+            IMPORTANT:
+            - Criteria weights must sum to 100
+            - Focus on measurable job requirements
+            - Avoid prestige/fit proxies unless directly job-relevant
+            - Do not use names/pronouns/clubs as proxies
+            - Cite specific evidence from resume for each score"""
+            
+        return ""
+    
+    def analyze_resume(self, resume_text: str, job_description: str, arm: EvaluationArm = EvaluationArm.SYSTEM_1) -> Dict:
         """Analyze resume against job description using Gemini AI"""
         
-        prompt = f"""
-        You are an expert resume analyst. Analyze the following resume against the job description and provide a comprehensive assessment.
-
-        RESUME TEXT:
-        {resume_text}
-
-        JOB DESCRIPTION:
-        {job_description}
-
-        Please provide your analysis in the following JSON format:
-        {{
-            "score": <integer from 0-100 representing overall match>,
-            "summary": "<one paragraph summary of the match quality>",
-            "recommendations": [
-                "<specific, actionable recommendation 1>",
-                "<specific, actionable recommendation 2>",
-                "<specific, actionable recommendation 3>",
-                "<specific, actionable recommendation 4>",
-                "<specific, actionable recommendation 5>"
-            ],
-            "missingKeywords": [
-                "<important missing keyword 1>",
-                "<important missing keyword 2>",
-                "<important missing keyword 3>",
-                "<important missing keyword 4>",
-                "<important missing keyword 5>"
-            ]
-        }}
-
-        Guidelines:
-        - Score should reflect overall alignment (skills, experience, qualifications)
-        - Summary should be concise but comprehensive
-        - Recommendations should be specific and implementable
-        - Missing keywords should be important terms from the job description
-        - Focus on actionable insights for resume improvement
-        - Consider both technical and soft skills
-        - Account for industry-specific requirements
-
-        Return ONLY the JSON response, no additional text.
-        """
+        # Get the appropriate prompt for the selected ARM
+        prompt = self.get_arm_prompt(arm, resume_text, job_description)
+        
+        try:
+            response = self.model.generate_content(prompt)
+            response_text = response.text.strip()
+            
+            # Clean up response text (remove markdown formatting if present)
+            if response_text.startswith("```json"):
+                response_text = response_text[7:]
+            if response_text.endswith("```"):
+                response_text = response_text[:-3]
+            
+            result = json.loads(response_text)
+            
+            # Validate the response format based on the ARM
+            if arm == EvaluationArm.SYSTEM_2:
+                if 'rubric' not in result or 'evaluation' not in result:
+                    raise ValueError("Invalid response format for ARM B")
+                
+                # Ensure all required fields are present
+                required_fields = {
+                    'rubric': ['criterion', 'weight', 'description'],
+                    'evaluation': {
+                        'scores': ['criterion', 'score', 'evidence'],
+                        'root': ['fit_score_1_to_5', 'shortlist_recommend', 'justification']
+                    }
+                }
+                
+                # Validate rubric
+                for criterion in result['rubric']:
+                    for field in required_fields['rubric']:
+                        if field not in criterion:
+                            raise ValueError(f"Missing {field} in rubric criterion")
+                
+                # Validate evaluation
+                eval_data = result['evaluation']
+                for score in eval_data.get('scores', []):
+                    for field in required_fields['evaluation']['scores']:
+                        if field not in score:
+                            raise ValueError(f"Missing {field} in evaluation score")
+                
+                for field in required_fields['evaluation']['root']:
+                    if field not in eval_data:
+                        raise ValueError(f"Missing {field} in evaluation")
+            
+            return result
+            
+        except json.JSONDecodeError as e:
+            raise Exception(f"Failed to parse AI response as JSON: {str(e)}")
+        except Exception as e:
+            raise Exception(f"AI analysis failed: {str(e)}")
         
         try:
             response = self.model.generate_content(prompt)
@@ -211,47 +311,76 @@ def validate_inputs(resume_text: str, job_description: str) -> Tuple[bool, str]:
     
     return True, ""
 
-def display_results(analysis_result: Dict):
+def display_results(analysis_result: Dict, arm: EvaluationArm):
     """Display analysis results in a formatted way"""
     
-    # Score display
-    score = analysis_result.get('score', 0)
-    score_color = "🟢" if score >= 80 else "🟡" if score >= 60 else "🔴"
-    
-    st.markdown(f"""
-    <div class="score-display">
-        <h2>{score_color} Overall Match Score: {score}/100</h2>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Summary
-    st.subheader("📋 Analysis Summary")
-    st.write(analysis_result.get('summary', 'No summary available'))
-    
-    # Recommendations
-    recommendations = analysis_result.get('recommendations', [])
-    if recommendations:
-        st.subheader("💡 Recommendations for Improvement")
+    if arm == EvaluationArm.SYSTEM_1:
+        # ARM A: Fast Intuitive Display
+        fit_score = analysis_result.get('fit_score_1_to_5', 0)
+        score_color = "🟢" if fit_score >= 4 else "🟡" if fit_score >= 3 else "🔴"
         
-        with st.expander("View All Recommendations", expanded=True):
-            for i, rec in enumerate(recommendations, 1):
-                st.markdown(f"""
-                <div class="recommendation-box">
-                    <strong>{i}.</strong> {rec}
-                </div>
-                """, unsafe_allow_html=True)
+        st.markdown(f"""
+        <div class="score-display">
+            <h2>{score_color} Quick Assessment Score: {fit_score}/5</h2>
+            <p>{'✅ Recommended for Shortlist' if analysis_result.get('shortlist_recommend', False) else '❌ Not Recommended'}</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.subheader("📋 Quick Assessment")
+        st.markdown(
+            f"""<div class="recommendation-box">{analysis_result.get('justification', 'No assessment available')}</div>""", 
+            unsafe_allow_html=True
+        )
     
-    # Missing Keywords
-    missing_keywords = analysis_result.get('missingKeywords', [])
-    if missing_keywords:
-        st.subheader("🔍 Missing Keywords")
-        st.write("Consider incorporating these important terms from the job description:")
+    elif arm == EvaluationArm.SYSTEM_2:
+        # ARM B: Deliberative Rubric-Based Display
+        evaluation = analysis_result.get('evaluation', {})
+        fit_score = evaluation.get('fit_score_1_to_5', 0)
+        score_color = "🟢" if fit_score >= 4 else "🟡" if fit_score >= 3 else "🔴"
         
-        keyword_html = ""
-        for keyword in missing_keywords:
-            keyword_html += f'<span class="missing-keyword">{keyword}</span>'
+        st.markdown(f"""
+        <div class="score-display">
+            <h2>{score_color} Detailed Evaluation Score: {fit_score}/5</h2>
+            <p>{'✅ Recommended for Shortlist' if evaluation.get('shortlist_recommend', False) else '❌ Not Recommended'}</p>
+        </div>
+        """, unsafe_allow_html=True)
         
-        st.markdown(keyword_html, unsafe_allow_html=True)
+        # Display Rubric and Scores
+        st.subheader("📊 Evaluation Rubric & Scores")
+        
+        # Display the rubric criteria first
+        st.markdown("#### Evaluation Criteria")
+        rubric = analysis_result.get('rubric', [])
+        for criterion in rubric:
+            st.markdown(f"""
+            <div class="recommendation-box">
+                <strong>{criterion['criterion']}</strong> (Weight: {criterion['weight']}%)
+                <p><em>{criterion['description']}</em></p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        st.markdown("#### Detailed Scores")
+        scores = evaluation.get('scores', [])
+        
+        for criterion_score in scores:
+            criterion_name = criterion_score.get('criterion', '')
+            score = criterion_score.get('score', 0)
+            evidence = criterion_score.get('evidence', '')
+            weight = next((r['weight'] for r in rubric if r['criterion'] == criterion_name), 0)
+            
+            st.markdown(f"""
+            <div class="recommendation-box">
+                <h4>{criterion_name} (Weight: {weight}%)</h4>
+                <p><strong>Score:</strong> {score}/5</p>
+                <p><strong>Evidence:</strong> {evidence}</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.subheader("📋 Final Assessment")
+        st.markdown(
+            f"""<div class="recommendation-box">{analysis_result.get('evaluation', {}).get('justification', 'No assessment available')}</div>""", 
+            unsafe_allow_html=True
+        )
 
 def main():
     """Main application function"""
@@ -264,20 +393,10 @@ def main():
     </div>
     """, unsafe_allow_html=True)
     
-    # Sidebar for API key
+    # Sidebar
     with st.sidebar:
         st.header("🔑 Configuration")
-        
-        api_key = st.text_input(
-            "Google AI API Key",
-            type="password",
-            help="Get your API key from [Google AI Studio](https://makersuite.google.com/app/apikey)"
-        )
-        
-        if not api_key:
-            st.warning("Please enter your Google AI API key to continue")
-            st.stop()
-        
+        api_key = os.getenv('GEMINI_API_KEY')
         st.markdown("---")
         st.markdown("### 📚 How to Use")
         st.markdown("""
@@ -338,8 +457,16 @@ def main():
             help="Minimum 50 characters required"
         )
     
-    # Analysis button and results
+    # Analysis options and button
     st.markdown("---")
+    
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        evaluation_mode = st.radio(
+            "Select Evaluation Mode:",
+            [EvaluationArm.SYSTEM_1.value, EvaluationArm.SYSTEM_2.value],
+            help="Choose between quick intuitive assessment or detailed rubric-based evaluation"
+        )
     
     if st.button("🚀 Analyze Resume", type="primary"):
         # Validate inputs
@@ -350,14 +477,17 @@ def main():
         
         # Perform analysis
         try:
-            with st.spinner("🤖 AI is analyzing your resume..."):
+            selected_arm = EvaluationArm.SYSTEM_1 if evaluation_mode == EvaluationArm.SYSTEM_1.value else EvaluationArm.SYSTEM_2
+            
+            with st.spinner("🤖 AI is analyzing your resume..." + 
+                          (" (Creating evaluation rubric...)" if selected_arm == EvaluationArm.SYSTEM_2 else "")):
                 analyzer = GeminiAnalyzer(api_key)
-                analysis_result = analyzer.analyze_resume(resume_text, job_description)
+                analysis_result = analyzer.analyze_resume(resume_text, job_description, selected_arm)
             
             # Display results
             st.markdown("---")
             st.header("📊 Analysis Results")
-            display_results(analysis_result)
+            display_results(analysis_result, selected_arm)
             
             # Additional resources
             st.markdown("---")
