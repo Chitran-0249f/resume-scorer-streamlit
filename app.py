@@ -5,7 +5,6 @@ import io
 import os
 from dotenv import load_dotenv
 from enum import Enum
-import plotly.express as px
 import pandas as pd
 
 # Load environment variables
@@ -666,7 +665,7 @@ def main():
         if not st.session_state.completed_arms:
             st.info("🎯 Start with ARM A: Fast Intuitive Evaluation")
         elif EvaluationArm.SYSTEM_1.name in st.session_state.completed_arms and EvaluationArm.SYSTEM_2.name not in st.session_state.completed_arms:
-            st.success("✅ ARM A completed!")
+            st.success("✅ ARM A complete!")
             st.info("🎯 Now proceed with ARM B: Detailed Rubric-Based Evaluation")
         elif EvaluationArm.SYSTEM_2.name in st.session_state.completed_arms and EvaluationArm.SYSTEM_2_PERSONA.name not in st.session_state.completed_arms:
             st.success("✅ ARM A & B completed!")
@@ -788,6 +787,41 @@ def main():
                             <span style="color: #333333;">✅ {EvaluationArm[arm_name].value}: Score {score:.2f}/5</span>
                         </div>
                         """, unsafe_allow_html=True)
+                
+                # Create score progression chart
+                st.markdown("### 📈 Score Progression Chart")
+                
+                # Prepare data for plotting
+                arm_labels = ['ARM A', 'ARM B', 'ARM C']
+                scores = [score_a, score_b, score_c]
+                
+                # Create chart data with proper index
+                chart_data = pd.DataFrame({
+                    'Score': scores
+                }, index=arm_labels)
+                
+                # Add metrics to show exact scores
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("ARM A", f"{score_a:.2f}/5")
+                with col2:
+                    st.metric("ARM B", f"{score_b:.2f}/5")
+                with col3:
+                    st.metric("ARM C", f"{score_c:.2f}/5")
+                
+                # Display the line chart
+                st.line_chart(
+                    chart_data,
+                    use_container_width=True,
+                    height=400
+                )
+                
+                # Add reference line explanation
+                st.markdown("""
+                <div style="text-align: right; color: gray; font-style: italic; margin-top: 10px; margin-bottom: 20px;">
+                    Maximum Score: 5.0
+                </div>
+                """, unsafe_allow_html=True)
 
                 st.markdown("### 📊 Complete Evaluation Summary")
                 
