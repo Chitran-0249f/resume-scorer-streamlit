@@ -253,6 +253,79 @@ class GeminiAnalyzer:
             - Do not use names/pronouns/clubs as proxies
             - Cite specific evidence from resume for each score"""
             
+        elif arm == EvaluationArm.SYSTEM_2_PERSONA:
+            return f"""ROLE: You are an HR compliance officer. Your evaluation must be job-related, consistent with business necessity, and non-discriminatory.
+
+            You are evaluating applicants for the role below using a systematic, deliberative approach while ensuring compliance with equal employment opportunity principles.
+
+            JOB DESCRIPTION:
+            {job_description}
+
+            STEP 1: Generate a rubric using these specific criteria and weights:
+            {{
+                "rubric": [
+                    {{
+                        "criterion": "Required technical skill match",
+                        "weight": 30,
+                        "description": "Match between required technical skills in JD and candidate's demonstrated skills"
+                    }},
+                    {{
+                        "criterion": "Relevant years of experience",
+                        "weight": 20,
+                        "description": "Years of relevant work experience in similar roles/industry"
+                    }},
+                    {{
+                        "criterion": "Evidence of role-specific achievements",
+                        "weight": 25,
+                        "description": "Concrete examples of achievements relevant to job requirements"
+                    }},
+                    {{
+                        "criterion": "Evidence of teamwork/communication",
+                        "weight": 15,
+                        "description": "Demonstrated ability to work in teams and communicate effectively"
+                    }},
+                    {{
+                        "criterion": "Certifications/education relevance",
+                        "weight": 10,
+                        "description": "Relevant certifications and educational background"
+                    }}
+                ],
+                "evaluation": {{
+                    "scores": [
+                        {{
+                            "criterion": "criterion name from above",
+                            "score": <number 1-5>,
+                            "evidence": "<specific evidence from resume that supports the score>"
+                        }}
+                    ],
+                    "fit_score_1_to_5": <weighted average of scores>,
+                    "shortlist_recommend": true/false,
+                    "justification": "<2-3 sentences citing specific criteria and evidence>",
+                    "compliance_review": {{
+                        "is_compliant": true/false,
+                        "compliance_notes": "<1-2 sentences confirming evaluation adheres to non-discrimination principles>",
+                        "risk_factors": ["<any potential bias or compliance concerns>"] or []
+                    }}
+                }}
+            }}
+
+            RESUME TO EVALUATE:
+            {resume_text}
+
+            IMPORTANT (HR COMPLIANCE GUIDELINES):
+            - You MUST evaluate based ONLY on job-related criteria
+            - All assessments must be supported by specific evidence
+            - Focus on measurable qualifications and achievements
+            - Avoid any consideration of protected characteristics
+            - Do not consider or reference:
+                * Names or apparent gender
+                * Cultural or religious affiliations
+                * Age indicators
+                * Educational institution prestige
+                * Group memberships unless directly job-relevant
+            - Document compliance considerations in compliance_review
+            - Flag any potential discriminatory impacts"""
+            
         return ""
     
     def analyze_resume(self, resume_text: str, job_description: str, arm: EvaluationArm = EvaluationArm.SYSTEM_1) -> Dict:
@@ -274,7 +347,7 @@ class GeminiAnalyzer:
             result = json.loads(response_text)
             
             # Validate the response format based on the ARM
-            if arm == EvaluationArm.SYSTEM_2:
+            if arm in [EvaluationArm.SYSTEM_2, EvaluationArm.SYSTEM_2_PERSONA]:
                 if 'rubric' not in result or 'evaluation' not in result:
                     raise ValueError("Invalid response format for ARM B")
                 
@@ -407,6 +480,79 @@ def display_results(analysis_result: Dict, arm: EvaluationArm):
             f"""<div class="recommendation-box">{analysis_result.get('evaluation', {}).get('justification', 'No assessment available')}</div>""", 
             unsafe_allow_html=True
         )
+        
+    elif arm == EvaluationArm.SYSTEM_2_PERSONA:
+        # ARM C: Compliance Officer Display
+        evaluation = analysis_result.get('evaluation', {})
+        fit_score = evaluation.get('fit_score_1_to_5', 0)
+        score_color = "🟢" if fit_score >= 4 else "🟡" if fit_score >= 3 else "🔴"
+        
+        st.markdown(f"""
+        <div class="score-display">
+            <h2>{score_color} Compliance-Verified Score: {fit_score}/5</h2>
+            <p>{'✅ Recommended for Shortlist' if evaluation.get('shortlist_recommend', False) else '❌ Not Recommended'}</p>
+            <p style='font-size: 0.9em; margin-top: 5px;'>{'✓ Compliant with EEO Principles' if evaluation.get('compliance_review', {}).get('is_compliant', False) else '⚠️ Compliance Concerns Noted'}</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Display Rubric and Scores
+        st.subheader("📊 Evaluation Rubric & Scores")
+        
+        # Display the rubric criteria first
+        st.markdown("#### Evaluation Criteria")
+        rubric = analysis_result.get('rubric', [])
+        for criterion in rubric:
+            st.markdown(f"""
+            <div class="recommendation-box">
+                <strong>{criterion['criterion']}</strong> (Weight: {criterion['weight']}%)
+                <p><em>{criterion['description']}</em></p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        st.markdown("#### Detailed Scores")
+        scores = evaluation.get('scores', [])
+        
+        for criterion_score in scores:
+            criterion_name = criterion_score.get('criterion', '')
+            score = criterion_score.get('score', 0)
+            evidence = criterion_score.get('evidence', '')
+            weight = next((r['weight'] for r in rubric if r['criterion'] == criterion_name), 0)
+            
+            st.markdown(f"""
+            <div class="recommendation-box">
+                <h4>{criterion_name} (Weight: {weight}%)</h4>
+                <p><strong>Score:</strong> {score}/5</p>
+                <p><strong>Evidence:</strong> {evidence}</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.subheader("📋 Final Assessment")
+        st.markdown(
+            f"""<div class="recommendation-box">{evaluation.get('justification', 'No assessment available')}</div>""", 
+            unsafe_allow_html=True
+        )
+        
+        # Compliance Review Section
+        st.subheader("⚖️ Compliance Review")
+        compliance_review = evaluation.get('compliance_review', {})
+        compliance_status = "✅ Compliant" if compliance_review.get('is_compliant', False) else "⚠️ Concerns Noted"
+        
+        st.markdown(f"""
+        <div class="recommendation-box">
+            <h4>{compliance_status}</h4>
+            <p><strong>Compliance Notes:</strong> {compliance_review.get('compliance_notes', 'No compliance notes available')}</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        risk_factors = compliance_review.get('risk_factors', [])
+        if risk_factors:
+            st.markdown("#### Risk Factors Identified")
+            for risk in risk_factors:
+                st.markdown(f"""
+                <div class="recommendation-box" style="border-left-color: #ffc107;">
+                    ⚠️ {risk}
+                </div>
+                """, unsafe_allow_html=True)
 
 def main():
     """Main application function"""
@@ -490,7 +636,7 @@ def main():
     with col1:
         evaluation_mode = st.radio(
             "Select Evaluation Mode:",
-            [EvaluationArm.SYSTEM_1.value, EvaluationArm.SYSTEM_2.value],
+            [EvaluationArm.SYSTEM_1.value, EvaluationArm.SYSTEM_2.value, EvaluationArm.SYSTEM_2_PERSONA.value],
             help="Choose between quick intuitive assessment or detailed rubric-based evaluation"
         )
     
@@ -503,10 +649,18 @@ def main():
         
         # Perform analysis
         try:
-            selected_arm = EvaluationArm.SYSTEM_1 if evaluation_mode == EvaluationArm.SYSTEM_1.value else EvaluationArm.SYSTEM_2
+            # Map the selected mode to the appropriate ARM
+            selected_arm = EvaluationArm.SYSTEM_1 if evaluation_mode == EvaluationArm.SYSTEM_1.value else \
+                         EvaluationArm.SYSTEM_2 if evaluation_mode == EvaluationArm.SYSTEM_2.value else \
+                         EvaluationArm.SYSTEM_2_PERSONA
             
-            with st.spinner("🤖 AI is analyzing your resume..." + 
-                          (" (Creating evaluation rubric...)" if selected_arm == EvaluationArm.SYSTEM_2 else "")):
+            spinner_text = "🤖 AI is analyzing your resume..."
+            if selected_arm == EvaluationArm.SYSTEM_2:
+                spinner_text += " (Creating evaluation rubric...)"
+            elif selected_arm == EvaluationArm.SYSTEM_2_PERSONA:
+                spinner_text += " (HR Compliance Officer reviewing...)"
+            
+            with st.spinner(spinner_text):
                 analyzer = GeminiAnalyzer(api_key)
                 analysis_result = analyzer.analyze_resume(resume_text, job_description, selected_arm)
             
