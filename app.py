@@ -39,11 +39,11 @@ def get_available_arms():
 
 def initialize_demo_scores():
     """Initialize the session state with demo scores if they don't exist"""
-    if not st.session_state.arm_scores:
+    if not st.session_state.arm_scores or len(st.session_state.arm_scores) < 3:
         st.session_state.arm_scores = {
-            'SYSTEM_1': 5.0,    # ARM A: 5.0
-            'SYSTEM_2': 4.1,    # ARM B: 4.1
-            'SYSTEM_2_PERSONA': 4.6  # ARM C: 4.6
+            'SYSTEM_1': 5.0,    # ARM A: Quick Insights Score
+            'SYSTEM_2': 4.1,    # ARM B: Detailed Evaluation Score
+            'SYSTEM_2_PERSONA': 4.6  # ARM C: Compliance-Verified Score
         }
 from typing import Dict, List, Optional, Tuple
 import PyPDF2
@@ -692,7 +692,7 @@ def main():
     if EvaluationArm.SYSTEM_2.name in st.session_state.completed_arms:
         button_text = "⚖️ Run Compliance Check (ARM C)"
     if len(st.session_state.completed_arms) >= 3:
-        button_text = "🔄 Re-run Analysis"
+        button_text = "� Show Complete Summary"
 
     if st.button(button_text, type="primary"):
         # Validate inputs
@@ -723,13 +723,18 @@ def main():
             
             # Store results and update progress
             if selected_arm == EvaluationArm.SYSTEM_1:
-                score = st.session_state.arm_scores['SYSTEM_1']
+                # Store the actual score from ARM A analysis
+                score = analysis_result.get('fit_score_1_to_5', 0)
+                st.session_state.arm_scores['SYSTEM_1'] = score
             elif selected_arm == EvaluationArm.SYSTEM_2:
-                score = st.session_state.arm_scores['SYSTEM_2']
+                # Store the actual score from ARM B analysis
+                score = analysis_result.get('evaluation', {}).get('fit_score_1_to_5', 0)
+                st.session_state.arm_scores['SYSTEM_2'] = score
             else:
-                score = st.session_state.arm_scores['SYSTEM_2_PERSONA']
+                # Store the actual score from ARM C analysis
+                score = analysis_result.get('evaluation', {}).get('fit_score_1_to_5', 0)
+                st.session_state.arm_scores['SYSTEM_2_PERSONA'] = score
             
-            st.session_state.arm_scores[selected_arm.name] = score
             st.session_state.completed_arms.add(selected_arm.name)
             
             # Display results
@@ -746,38 +751,124 @@ def main():
                 st.success("🎉 Congratulations! You've completed all evaluation ARMs.")
                 st.markdown("---")
                 
+                # Get the actual stored scores from each ARM
+                score_a = st.session_state.arm_scores.get('SYSTEM_1', 0)
+                score_b = st.session_state.arm_scores.get('SYSTEM_2', 0)
+                score_c = st.session_state.arm_scores.get('SYSTEM_2_PERSONA', 0)
+                
+                # Display current progress
+                st.markdown("### 🎯 Evaluation Progress")
+                st.markdown("""
+                <style>
+                .progress-box {
+                    padding: 10px;
+                    border-radius: 5px;
+                    margin: 5px 0;
+                    background-color: #f8f9fa;
+                    border-left: 4px solid #28a745;
+                    color: #333333;  /* Dark gray text for better contrast */
+                    font-weight: 500;  /* Slightly bolder text */
+                }
+                .progress-title {
+                    color: #1f2937;  /* Dark color for the title */
+                    font-size: 1.2em;
+                    margin-bottom: 10px;
+                }
+                </style>
+                """, unsafe_allow_html=True)
+                
+                for arm_name, score in [
+                    ('SYSTEM_1', score_a),
+                    ('SYSTEM_2', score_b),
+                    ('SYSTEM_2_PERSONA', score_c)
+                ]:
+                    if arm_name in st.session_state.completed_arms:
+                        st.markdown(f"""
+                        <div class="progress-box">
+                            <span style="color: #333333;">✅ {EvaluationArm[arm_name].value}: Score {score:.2f}/5</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                st.markdown("### 📊 Complete Evaluation Summary")
+                
+                # ARM A Summary
+                st.markdown("### ARM A: Quick Insights Evaluation")
+                st.markdown(f"""
+                <div class="recommendation-box">
+                    <h4>Quick Insights Score: {score_a}/5</h4>
+                    <p>Initial assessment based on key resume elements</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                st.markdown("### ARM B: Detailed Rubric-Based Evaluation")
+                st.markdown(f"""
+                <div class="recommendation-box">
+                    <h4>Detailed Evaluation Score: {score_b}/5</h4>
+                    <p>Systematic evaluation using weighted criteria and evidence</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                st.markdown("### ARM C: Compliance-Focused Evaluation")
+                st.markdown(f"""
+                <div class="recommendation-box">
+                    <h4>Compliance-Verified Score: {score_c}/5</h4>
+                    <p>HR compliance assessment ensuring fair evaluation</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Score Progression Analysis
+                st.markdown("### 📈 Score Progression Analysis")
+                scores = [score_a, score_b, score_c]
+                avg_score = sum(scores) / len(scores)
+                variance = max(scores) - min(scores)
+                
+                st.markdown("""
+                <div class="recommendation-box">
+                    <h4>Overall Assessment</h4>
+                """, unsafe_allow_html=True)
+                
+                st.markdown(f"Average Score: {avg_score:.1f}/5\n")
+                st.markdown(f"\nScore Consistency: {'High' if variance < 0.5 else 'Moderate' if variance < 1 else 'Variable'} (variance: {variance:.1f} points)")
+                
+                # Determine recommendation based on average score
+                recommendation = ('✅ Strongly Recommended' if avg_score >= 4.5 else
+                                '✅ Recommended' if avg_score >= 4.0 else
+                                '⚠️ Consider with Reservations' if avg_score >= 3.0 else
+                                '❌ Not Recommended')
+                
+                st.markdown(f"\nFinal Recommendation: {recommendation}")
+                
+                st.markdown("</div>", unsafe_allow_html=True)
+                st.markdown("---")
+                
                 if st.button("� Show Complete Evaluation Summary", type="primary"):
-                    st.markdown("### ARM A: Fast Intuitive Evaluation")
+                    st.markdown("### ARM A: Quick Insights Evaluation")
                     st.markdown(f"""
                     <div class="recommendation-box">
-                        <h4>Quick Assessment Score: {st.session_state.arm_scores.get('SYSTEM_1', 0)}/5</h4>
-                        <p>Quick, intuitive evaluation based on immediate job-fit assessment</p>
+                        <h4>Quick Insights Score: {score_a}/5</h4>
+                        <p>Initial assessment based on key resume elements</p>
                     </div>
                     """, unsafe_allow_html=True)
                     
                     st.markdown("### ARM B: Detailed Rubric-Based Evaluation")
                     st.markdown(f"""
                     <div class="recommendation-box">
-                        <h4>Detailed Evaluation Score: {st.session_state.arm_scores.get('SYSTEM_2', 0)}/5</h4>
-                        <p>Systematic evaluation using weighted criteria and specific evidence</p>
+                        <h4>Detailed Evaluation Score: {score_b}/5</h4>
+                        <p>Systematic evaluation using weighted criteria and evidence</p>
                     </div>
                     """, unsafe_allow_html=True)
                     
                     st.markdown("### ARM C: Compliance-Focused Evaluation")
                     st.markdown(f"""
                     <div class="recommendation-box">
-                        <h4>Compliance-Verified Score: {st.session_state.arm_scores.get('SYSTEM_2_PERSONA', 0)}/5</h4>
-                        <p>HR compliance evaluation ensuring fair and unbiased assessment</p>
+                        <h4>Compliance-Verified Score: {score_c}/5</h4>
+                        <p>HR compliance assessment ensuring fair evaluation</p>
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # Show progression insight
-                    st.markdown("### 📈 Score Progression Analysis")
-                    scores = [
-                        st.session_state.arm_scores.get('SYSTEM_1', 0),
-                        st.session_state.arm_scores.get('SYSTEM_2', 0),
-                        st.session_state.arm_scores.get('SYSTEM_2_PERSONA', 0)
-                    ]
+                    st.markdown("---")
+                    st.markdown("### 📈 Overall Evaluation Summary")
+                    scores = [score_a, score_b, score_c]  # Use the stored variables
                     avg_score = sum(scores) / len(scores)
                     variance = max(scores) - min(scores)
                     
