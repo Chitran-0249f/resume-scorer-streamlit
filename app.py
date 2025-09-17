@@ -673,6 +673,18 @@ def main():
         elif len(st.session_state.completed_arms) >= 3:
             st.success("🎉 All ARMs completed! Full evaluation process finished.")
         
+        # If there is a just-completed analysis, show it now (persisted across rerun)
+        if st.session_state.get('last_analysis_result') is not None and st.session_state.get('last_analysis_arm') is not None:
+            st.markdown("---")
+            st.header("📊 Analysis Results")
+            try:
+                arm_to_display = EvaluationArm[st.session_state['last_analysis_arm']]
+                display_results(st.session_state['last_analysis_result'], arm_to_display)
+            finally:
+                # Clear after displaying so it doesn't repeat on further reruns
+                del st.session_state['last_analysis_result']
+                del st.session_state['last_analysis_arm']
+
         # Display the current ARM selection
         evaluation_mode = st.radio(
             "Current Evaluation Mode:",
@@ -735,17 +747,21 @@ def main():
                 st.session_state.arm_scores['SYSTEM_2_PERSONA'] = score
             
             st.session_state.completed_arms.add(selected_arm.name)
-            
-            # Display results
-            st.markdown("---")
-            st.header("📊 Analysis Results")
-            display_results(analysis_result, selected_arm)
+
+            # Persist the analysis so we can show it right after rerun
+            st.session_state['last_analysis_result'] = analysis_result
+            st.session_state['last_analysis_arm'] = selected_arm.name
+
+            # Immediately refresh so the next ARM is enabled and analysis is shown without extra click
+            # Only rerun if there are remaining ARMs; otherwise continue to show final summary
+            if len(st.session_state.completed_arms) < 3:
+                st.rerun()
             
             # Show completion message and next steps
             if len(st.session_state.completed_arms) < 3:
                 next_arm = "ARM B" if len(st.session_state.completed_arms) == 1 else "ARM C"
                 st.success(f"✅ Analysis complete! The next step ({next_arm}) is now available.")
-                st.info(f"Click 'Analyze Resume' again to proceed with {next_arm}")
+                st.info(f"Next stage: {next_arm} is now available.")
             else:
                 st.success("🎉 Congratulations! You've completed all evaluation ARMs.")
                 st.markdown("---")
