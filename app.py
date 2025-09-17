@@ -951,7 +951,7 @@ def main():
                 
                 st.markdown("""
                 <div class="recommendation-box">
-                    <h4>Overall Assessment</h4>
+                    <h4 style="color: #000000;">Overall Assessment</h4>
                 """, unsafe_allow_html=True)
                 
                 st.markdown(f"Average Score: {avg_score:.1f}/5\n")
@@ -1001,7 +1001,7 @@ def main():
                     
                     st.markdown(f"""
                     <div class="recommendation-box">
-                        <h4>Overall Assessment</h4>
+                        <h4 style=\"color: #000000;\">Overall Assessment</h4>
                         <p><strong>Average Score:</strong> {avg_score:.1f}/5</p>
                         <p><strong>Score Consistency:</strong> {
                         'High' if variance < 0.5 else 'Moderate' if variance < 1 else 'Variable'
@@ -1021,7 +1021,7 @@ def main():
             
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.markdown("[📝 Resume Builder](https://www.canva.com/resumes/)")
+                st.markdown("[📝 Resume Builder](https://chitranshuharbola.online/resume-builder)")
             with col2:
                 st.markdown("[💼 Job Search Tips](https://www.indeed.com/career-advice)")
             with col3:
