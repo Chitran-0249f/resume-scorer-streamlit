@@ -687,11 +687,11 @@ def main():
     # Set button text based on current ARM
     button_text = "🚀 Start Fast Evaluation (ARM A)"
     if EvaluationArm.SYSTEM_1.name in st.session_state.completed_arms:
-        button_text = "� Run Detailed Analysis (ARM B)"
+        button_text = "Run Detailed Analysis (ARM B)"
     if EvaluationArm.SYSTEM_2.name in st.session_state.completed_arms:
         button_text = "⚖️ Run Compliance Check (ARM C)"
     if len(st.session_state.completed_arms) >= 3:
-        button_text = "� Show Complete Summary"
+        button_text = "Show Complete Summary"
 
     if st.button(button_text, type="primary"):
         # Validate inputs
