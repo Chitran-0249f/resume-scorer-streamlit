@@ -822,6 +822,83 @@ def main():
                     Maximum Score: 5.0
                 </div>
                 """, unsafe_allow_html=True)
+                
+                # Create downloadable summary
+                st.markdown("---")
+                st.markdown("### 📥 Download Evaluation Summary")
+                
+                # Generate HTML summary
+                html_summary = f"""
+                <html>
+                <head>
+                <style>
+                    body {{ font-family: Arial, sans-serif; padding: 20px; }}
+                    .header {{ text-align: center; color: #1f77b4; margin-bottom: 30px; }}
+                    .score-box {{ 
+                        background-color: #f8f9fa;
+                        border-left: 4px solid #007bff;
+                        padding: 15px;
+                        margin: 10px 0;
+                        border-radius: 5px;
+                    }}
+                    .final-summary {{
+                        background-color: #e9ecef;
+                        padding: 20px;
+                        border-radius: 5px;
+                        margin-top: 20px;
+                    }}
+                </style>
+                </head>
+                <body>
+                    <div class="header">
+                        <h1>Resume Evaluation Summary</h1>
+                        <p>Generated on {datetime.now().strftime("%Y-%m-%d %H:%M")}</p>
+                    </div>
+                    
+                    <h2>Evaluation Results</h2>
+                    
+                    <div class="score-box">
+                        <h3>ARM A: Quick Insights Evaluation</h3>
+                        <p><strong>Score:</strong> {score_a:.2f}/5</p>
+                        <p>Initial assessment based on key resume elements</p>
+                    </div>
+                    
+                    <div class="score-box">
+                        <h3>ARM B: Detailed Rubric-Based Evaluation</h3>
+                        <p><strong>Score:</strong> {score_b:.2f}/5</p>
+                        <p>Systematic evaluation using weighted criteria and evidence</p>
+                    </div>
+                    
+                    <div class="score-box">
+                        <h3>ARM C: Compliance-Focused Evaluation</h3>
+                        <p><strong>Score:</strong> {score_c:.2f}/5</p>
+                        <p>HR compliance assessment ensuring fair evaluation</p>
+                    </div>
+                    
+                    <div class="final-summary">
+                        <h2>Overall Assessment</h2>
+                        <p><strong>Average Score:</strong> {sum([score_a, score_b, score_c])/3:.2f}/5</p>
+                        <p><strong>Score Consistency:</strong> {
+                        'High' if max([score_a, score_b, score_c]) - min([score_a, score_b, score_c]) < 0.5 
+                        else 'Moderate' if max([score_a, score_b, score_c]) - min([score_a, score_b, score_c]) < 1 
+                        else 'Variable'}</p>
+                        <p><strong>Final Recommendation:</strong> {
+                        '✅ Strongly Recommended' if sum([score_a, score_b, score_c])/3 >= 4.5 
+                        else '✅ Recommended' if sum([score_a, score_b, score_c])/3 >= 4.0 
+                        else '⚠️ Consider with Reservations' if sum([score_a, score_b, score_c])/3 >= 3.0 
+                        else '❌ Not Recommended'}</p>
+                    </div>
+                </body>
+                </html>
+                """
+                
+                # Create download button
+                st.download_button(
+                    label="📄 Download Complete Evaluation Report",
+                    data=html_summary,
+                    file_name=f"resume_evaluation_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
+                    mime="text/html",
+                )
 
                 st.markdown("### 📊 Complete Evaluation Summary")
                 
