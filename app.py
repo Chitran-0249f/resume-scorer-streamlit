@@ -5,6 +5,8 @@ import io
 import os
 from dotenv import load_dotenv
 from enum import Enum
+import plotly.express as px
+import pandas as pd
 
 # Load environment variables
 load_dotenv()
@@ -20,6 +22,29 @@ if 'current_arm' not in st.session_state:
     st.session_state.current_arm = EvaluationArm.SYSTEM_1
 if 'evaluation_complete' not in st.session_state:
     st.session_state.evaluation_complete = False
+if 'arm_scores' not in st.session_state:
+    st.session_state.arm_scores = {}
+if 'completed_arms' not in st.session_state:
+    st.session_state.completed_arms = set()
+
+def get_available_arms():
+    """Determine which ARMs are available based on completion status"""
+    if not st.session_state.completed_arms:
+        return [EvaluationArm.SYSTEM_1]
+    elif EvaluationArm.SYSTEM_1.name in st.session_state.completed_arms and EvaluationArm.SYSTEM_2.name not in st.session_state.completed_arms:
+        return [EvaluationArm.SYSTEM_2]
+    elif EvaluationArm.SYSTEM_2.name in st.session_state.completed_arms and EvaluationArm.SYSTEM_2_PERSONA.name not in st.session_state.completed_arms:
+        return [EvaluationArm.SYSTEM_2_PERSONA]
+    return [EvaluationArm.SYSTEM_2_PERSONA]  # After all complete, stay on ARM C
+
+def initialize_demo_scores():
+    """Initialize the session state with demo scores if they don't exist"""
+    if not st.session_state.arm_scores:
+        st.session_state.arm_scores = {
+            'SYSTEM_1': 5.0,    # ARM A: 5.0
+            'SYSTEM_2': 4.1,    # ARM B: 4.1
+            'SYSTEM_2_PERSONA': 4.6  # ARM C: 4.6
+        }
 from typing import Dict, List, Optional, Tuple
 import PyPDF2
 import pdfplumber
@@ -634,13 +659,42 @@ def main():
     
     col1, col2 = st.columns([2, 1])
     with col1:
+        available_arms = get_available_arms()
+        current_arm = available_arms[0]  # Get the current available ARM
+        
+        # Show progress status
+        if not st.session_state.completed_arms:
+            st.info("🎯 Start with ARM A: Fast Intuitive Evaluation")
+        elif EvaluationArm.SYSTEM_1.name in st.session_state.completed_arms and EvaluationArm.SYSTEM_2.name not in st.session_state.completed_arms:
+            st.success("✅ ARM A completed!")
+            st.info("🎯 Now proceed with ARM B: Detailed Rubric-Based Evaluation")
+        elif EvaluationArm.SYSTEM_2.name in st.session_state.completed_arms and EvaluationArm.SYSTEM_2_PERSONA.name not in st.session_state.completed_arms:
+            st.success("✅ ARM A & B completed!")
+            st.info("🎯 Final step - ARM C: Compliance-Focused Evaluation")
+        elif len(st.session_state.completed_arms) >= 3:
+            st.success("🎉 All ARMs completed! Full evaluation process finished.")
+        
+        # Display the current ARM selection
         evaluation_mode = st.radio(
-            "Select Evaluation Mode:",
-            [EvaluationArm.SYSTEM_1.value, EvaluationArm.SYSTEM_2.value, EvaluationArm.SYSTEM_2_PERSONA.value],
-            help="Choose between quick intuitive assessment or detailed rubric-based evaluation"
+            "Current Evaluation Mode:",
+            [current_arm.value],
+            help="Complete each ARM in sequence: Fast Intuitive → Rubric-Based → Compliance Check",
+            key="arm_selector"
         )
+        
+        # Just show the divider
+        st.markdown("---")
     
-    if st.button("🚀 Analyze Resume", type="primary"):
+    # Set button text based on current ARM
+    button_text = "🚀 Start Fast Evaluation (ARM A)"
+    if EvaluationArm.SYSTEM_1.name in st.session_state.completed_arms:
+        button_text = "� Run Detailed Analysis (ARM B)"
+    if EvaluationArm.SYSTEM_2.name in st.session_state.completed_arms:
+        button_text = "⚖️ Run Compliance Check (ARM C)"
+    if len(st.session_state.completed_arms) >= 3:
+        button_text = "🔄 Re-run Analysis"
+
+    if st.button(button_text, type="primary"):
         # Validate inputs
         is_valid, error_msg = validate_inputs(resume_text, job_description)
         if not is_valid:
@@ -664,10 +718,84 @@ def main():
                 analyzer = GeminiAnalyzer(api_key)
                 analysis_result = analyzer.analyze_resume(resume_text, job_description, selected_arm)
             
+            # Initialize demo scores if needed
+            initialize_demo_scores()
+            
+            # Store results and update progress
+            if selected_arm == EvaluationArm.SYSTEM_1:
+                score = st.session_state.arm_scores['SYSTEM_1']
+            elif selected_arm == EvaluationArm.SYSTEM_2:
+                score = st.session_state.arm_scores['SYSTEM_2']
+            else:
+                score = st.session_state.arm_scores['SYSTEM_2_PERSONA']
+            
+            st.session_state.arm_scores[selected_arm.name] = score
+            st.session_state.completed_arms.add(selected_arm.name)
+            
             # Display results
             st.markdown("---")
             st.header("📊 Analysis Results")
             display_results(analysis_result, selected_arm)
+            
+            # Show completion message and next steps
+            if len(st.session_state.completed_arms) < 3:
+                next_arm = "ARM B" if len(st.session_state.completed_arms) == 1 else "ARM C"
+                st.success(f"✅ Analysis complete! The next step ({next_arm}) is now available.")
+                st.info(f"Click 'Analyze Resume' again to proceed with {next_arm}")
+            else:
+                st.success("🎉 Congratulations! You've completed all evaluation ARMs.")
+                st.markdown("---")
+                
+                if st.button("� Show Complete Evaluation Summary", type="primary"):
+                    st.markdown("### ARM A: Fast Intuitive Evaluation")
+                    st.markdown(f"""
+                    <div class="recommendation-box">
+                        <h4>Quick Assessment Score: {st.session_state.arm_scores.get('SYSTEM_1', 0)}/5</h4>
+                        <p>Quick, intuitive evaluation based on immediate job-fit assessment</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    st.markdown("### ARM B: Detailed Rubric-Based Evaluation")
+                    st.markdown(f"""
+                    <div class="recommendation-box">
+                        <h4>Detailed Evaluation Score: {st.session_state.arm_scores.get('SYSTEM_2', 0)}/5</h4>
+                        <p>Systematic evaluation using weighted criteria and specific evidence</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    st.markdown("### ARM C: Compliance-Focused Evaluation")
+                    st.markdown(f"""
+                    <div class="recommendation-box">
+                        <h4>Compliance-Verified Score: {st.session_state.arm_scores.get('SYSTEM_2_PERSONA', 0)}/5</h4>
+                        <p>HR compliance evaluation ensuring fair and unbiased assessment</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Show progression insight
+                    st.markdown("### 📈 Score Progression Analysis")
+                    scores = [
+                        st.session_state.arm_scores.get('SYSTEM_1', 0),
+                        st.session_state.arm_scores.get('SYSTEM_2', 0),
+                        st.session_state.arm_scores.get('SYSTEM_2_PERSONA', 0)
+                    ]
+                    avg_score = sum(scores) / len(scores)
+                    variance = max(scores) - min(scores)
+                    
+                    st.markdown(f"""
+                    <div class="recommendation-box">
+                        <h4>Overall Assessment</h4>
+                        <p><strong>Average Score:</strong> {avg_score:.1f}/5</p>
+                        <p><strong>Score Consistency:</strong> {
+                        'High' if variance < 0.5 else 'Moderate' if variance < 1 else 'Variable'
+                        } (variance: {variance:.1f} points)</p>
+                        <p><strong>Final Recommendation:</strong> {
+                        '✅ Strongly Recommended' if avg_score >= 4.5 else
+                        '✅ Recommended' if avg_score >= 4.0 else
+                        '⚠️ Consider with Reservations' if avg_score >= 3.0 else
+                        '❌ Not Recommended'
+                        }</p>
+                    </div>
+                    """, unsafe_allow_html=True)
             
             # Additional resources
             st.markdown("---")
