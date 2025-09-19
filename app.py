@@ -28,21 +28,19 @@ if 'completed_arms' not in st.session_state:
 
 def get_available_arms():
     """Determine which ARMs are available based on completion status"""
-    enable_arm_d = st.session_state.get('enable_arm_d', False)
     if not st.session_state.completed_arms:
         return [EvaluationArm.SYSTEM_1]
     if EvaluationArm.SYSTEM_1.name in st.session_state.completed_arms and EvaluationArm.SYSTEM_2.name not in st.session_state.completed_arms:
         return [EvaluationArm.SYSTEM_2]
     if EvaluationArm.SYSTEM_2.name in st.session_state.completed_arms and EvaluationArm.SYSTEM_2_PERSONA.name not in st.session_state.completed_arms:
         return [EvaluationArm.SYSTEM_2_PERSONA]
-    if enable_arm_d and EvaluationArm.SYSTEM_2_PERSONA.name in st.session_state.completed_arms and EvaluationArm.SYSTEM_2_PERSONA_DEBIAS.name not in st.session_state.completed_arms:
+    if EvaluationArm.SYSTEM_2_PERSONA.name in st.session_state.completed_arms and EvaluationArm.SYSTEM_2_PERSONA_DEBIAS.name not in st.session_state.completed_arms:
         return [EvaluationArm.SYSTEM_2_PERSONA_DEBIAS]
-    # After all complete, stay on the last required arm
-    return [EvaluationArm.SYSTEM_2_PERSONA_DEBIAS if enable_arm_d else EvaluationArm.SYSTEM_2_PERSONA]
+    # After all complete, stay on ARM D
+    return [EvaluationArm.SYSTEM_2_PERSONA_DEBIAS]
 
 def initialize_demo_scores():
     """Initialize the session state with demo scores if they don't exist"""
-    enable_arm_d = st.session_state.get('enable_arm_d', False)
     if not st.session_state.arm_scores:
         st.session_state.arm_scores = {}
     if 'SYSTEM_1' not in st.session_state.arm_scores:
@@ -51,7 +49,7 @@ def initialize_demo_scores():
         st.session_state.arm_scores['SYSTEM_2'] = 4.1
     if 'SYSTEM_2_PERSONA' not in st.session_state.arm_scores:
         st.session_state.arm_scores['SYSTEM_2_PERSONA'] = 4.6
-    if enable_arm_d and 'SYSTEM_2_PERSONA_DEBIAS' not in st.session_state.arm_scores:
+    if 'SYSTEM_2_PERSONA_DEBIAS' not in st.session_state.arm_scores:
         st.session_state.arm_scores['SYSTEM_2_PERSONA_DEBIAS'] = 4.4
 from typing import Dict, List, Optional, Tuple
 import PyPDF2
@@ -700,9 +698,7 @@ def main():
     
     # Sidebar
     with st.sidebar:
-        st.header("🔑 Configuration")
         api_key = os.getenv('GEMINI_API_KEY')
-        st.checkbox("Enable ARM D (Compliance + Debias)", key='enable_arm_d', help="Adds optional ARM D after ARM C")
         st.markdown("---")
         st.markdown("### 📚 How to Use")
         st.markdown("""
@@ -768,8 +764,7 @@ def main():
     
     col1, col2 = st.columns([2, 1])
     with col1:
-        enable_arm_d = st.session_state.get('enable_arm_d', False)
-        total_required_arms = 4 if enable_arm_d else 3
+        total_required_arms = 4  # ARM D is always enabled
         available_arms = get_available_arms()
         current_arm = available_arms[0]  # Get the current available ARM
         
@@ -781,7 +776,10 @@ def main():
             st.info("🎯 Now proceed with ARM B: Detailed Rubric-Based Evaluation")
         elif EvaluationArm.SYSTEM_2.name in st.session_state.completed_arms and EvaluationArm.SYSTEM_2_PERSONA.name not in st.session_state.completed_arms:
             st.success("✅ ARM A & B completed!")
-            st.info("🎯 Final step - ARM C: Compliance-Focused Evaluation")
+            st.info("🎯 Now proceed with ARM C: Compliance-Focused Evaluation")
+        elif EvaluationArm.SYSTEM_2_PERSONA.name in st.session_state.completed_arms and EvaluationArm.SYSTEM_2_PERSONA_DEBIAS.name not in st.session_state.completed_arms:
+            st.success("✅ ARM A, B & C completed!")
+            st.info("🎯 Final step - ARM D: Compliance + Debias Evaluation")
         elif len(st.session_state.completed_arms) >= total_required_arms:
             st.success("🎉 All ARMs completed! Full evaluation process finished.")
         
@@ -814,9 +812,9 @@ def main():
         button_text = "Run Detailed Analysis (ARM B)"
     elif EvaluationArm.SYSTEM_2.name in st.session_state.completed_arms and EvaluationArm.SYSTEM_2_PERSONA.name not in st.session_state.completed_arms:
         button_text = "⚖️ Run Compliance Check (ARM C)"
-    elif st.session_state.get('enable_arm_d', False) and EvaluationArm.SYSTEM_2_PERSONA.name in st.session_state.completed_arms and EvaluationArm.SYSTEM_2_PERSONA_DEBIAS.name not in st.session_state.completed_arms:
+    elif EvaluationArm.SYSTEM_2_PERSONA.name in st.session_state.completed_arms and EvaluationArm.SYSTEM_2_PERSONA_DEBIAS.name not in st.session_state.completed_arms:
         button_text = "🧭 Run Compliance + Debias (ARM D)"
-    elif len(st.session_state.completed_arms) >= (4 if st.session_state.get('enable_arm_d', False) else 3):
+    elif len(st.session_state.completed_arms) >= 4:
         button_text = "Show Complete Summary"
 
     if st.button(button_text, type="primary"):
@@ -886,7 +884,7 @@ def main():
                     next_arm = "ARM B"
                 elif len(st.session_state.completed_arms) == 2:
                     next_arm = "ARM C"
-                else:
+                elif len(st.session_state.completed_arms) == 3:
                     next_arm = "ARM D"
                 st.success(f"✅ Analysis complete! The next step ({next_arm}) is now available.")
                 st.info(f"Next stage: {next_arm} is now available.")
@@ -924,10 +922,9 @@ def main():
                 arms_and_scores = [
                     ('SYSTEM_1', score_a),
                     ('SYSTEM_2', score_b),
-                    ('SYSTEM_2_PERSONA', score_c)
+                    ('SYSTEM_2_PERSONA', score_c),
+                    ('SYSTEM_2_PERSONA_DEBIAS', score_d)
                 ]
-                if enable_arm_d:
-                    arms_and_scores.append(('SYSTEM_2_PERSONA_DEBIAS', score_d))
                 for arm_name, score in arms_and_scores:
                     if arm_name in st.session_state.completed_arms:
                         st.markdown(f"""
@@ -940,11 +937,8 @@ def main():
                 st.markdown("### 📈 Score Progression Chart")
                 
                 # Prepare data for plotting
-                arm_labels = ['ARM A', 'ARM B', 'ARM C']
-                scores = [score_a, score_b, score_c]
-                if enable_arm_d:
-                    arm_labels.append('ARM D')
-                    scores.append(score_d)
+                arm_labels = ['ARM A', 'ARM B', 'ARM C', 'ARM D']
+                scores = [score_a, score_b, score_c, score_d]
                 
                 # Create chart data with proper index
                 chart_data = pd.DataFrame({
@@ -952,24 +946,15 @@ def main():
                 }, index=arm_labels)
                 
                 # Add metrics to show exact scores
-                if enable_arm_d:
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("ARM A", f"{score_a:.2f}/5")
-                    with col2:
-                        st.metric("ARM B", f"{score_b:.2f}/5")
-                    with col3:
-                        st.metric("ARM C", f"{score_c:.2f}/5")
-                    with col4:
-                        st.metric("ARM D", f"{score_d:.2f}/5")
-                else:
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("ARM A", f"{score_a:.2f}/5")
-                    with col2:
-                        st.metric("ARM B", f"{score_b:.2f}/5")
-                    with col3:
-                        st.metric("ARM C", f"{score_c:.2f}/5")
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("ARM A", f"{score_a:.2f}/5")
+                with col2:
+                    st.metric("ARM B", f"{score_b:.2f}/5")
+                with col3:
+                    st.metric("ARM C", f"{score_c:.2f}/5")
+                with col4:
+                    st.metric("ARM D", f"{score_d:.2f}/5")
                 
                 # Display the line chart
                 st.line_chart(
@@ -1089,18 +1074,17 @@ def main():
                 </div>
                 """, unsafe_allow_html=True)
                 
-                if enable_arm_d:
-                    st.markdown("### ARM D: Compliance + Debias Evaluation")
-                    st.markdown(f"""
-                    <div class=\"recommendation-box\">
-                        <h4>Debiased Compliance Score: {score_d}/5</h4>
-                        <p>Compliance review with bias mitigation</p>
-                    </div>
-                    """, unsafe_allow_html=True)
+                st.markdown("### ARM D: Compliance + Debias Evaluation")
+                st.markdown(f"""
+                <div class=\"recommendation-box\">
+                    <h4>Debiased Compliance Score: {score_d}/5</h4>
+                    <p>Compliance review with bias mitigation</p>
+                </div>
+                """, unsafe_allow_html=True)
                 
                 # Score Progression Analysis
                 st.markdown("### 📈 Score Progression Analysis")
-                scores = [score_a, score_b, score_c] if not enable_arm_d else [score_a, score_b, score_c, score_d]
+                scores = [score_a, score_b, score_c, score_d]
                 avg_score = sum(scores) / len(scores)
                 variance = max(scores) - min(scores)
                 
@@ -1147,18 +1131,17 @@ def main():
                         <p>HR compliance assessment ensuring fair evaluation</p>
                     </div>
                     """, unsafe_allow_html=True)
-                    if enable_arm_d:
-                        st.markdown("### ARM D: Compliance + Debias Evaluation")
-                        st.markdown(f"""
-                        <div class=\"recommendation-box\">
-                            <h4>Debiased Compliance Score: {score_d}/5</h4>
-                            <p>Compliance review with bias mitigation</p>
-                        </div>
-                        """, unsafe_allow_html=True)
+                    st.markdown("### ARM D: Compliance + Debias Evaluation")
+                    st.markdown(f"""
+                    <div class=\"recommendation-box\">
+                        <h4>Debiased Compliance Score: {score_d}/5</h4>
+                        <p>Compliance review with bias mitigation</p>
+                    </div>
+                    """, unsafe_allow_html=True)
                     
                     st.markdown("---")
                     st.markdown("### 📈 Overall Evaluation Summary")
-                    scores = [score_a, score_b, score_c] if not enable_arm_d else [score_a, score_b, score_c, score_d]
+                    scores = [score_a, score_b, score_c, score_d]
                     avg_score = sum(scores) / len(scores)
                     variance = max(scores) - min(scores)
                     
