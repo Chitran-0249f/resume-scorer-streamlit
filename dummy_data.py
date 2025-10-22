@@ -209,9 +209,9 @@ def get_dummy_data_for_arm_d() -> Dict:
                 "compliance_notes": "This is a standard compliant evaluation focused only on job-relevant qualifications with debiasing applied.",
                 "risk_factors": []
             },
-            "bias_mitigation": {
-                "bias_check_performed": True,
-                "potential_biases_mitigated": ["Educational institution prestige", "Name-based assumptions", "Resume formatting biases"],
+            "debias_review": {
+                "mitigations_applied": ["Educational institution prestige", "Name-based assumptions", "Resume formatting biases"],
+                "residual_risks": [],
                 "notes": "Fallback evaluation using standardized job-relevant criteria only."
             }
         }

@@ -981,16 +981,27 @@ def main():
 
         # Perform analysis
         try:
-            # Map the selected mode to the appropriate ARM
-            selected_arm = EvaluationArm.SYSTEM_1 if evaluation_mode == EvaluationArm.SYSTEM_1.value else \
-                         EvaluationArm.SYSTEM_2 if evaluation_mode == EvaluationArm.SYSTEM_2.value else \
-                         EvaluationArm.SYSTEM_2_PERSONA
+            # Determine which ARM to run based on completion status
+            if EvaluationArm.SYSTEM_1.name not in current_resume['completed_arms']:
+                selected_arm = EvaluationArm.SYSTEM_1
+            elif EvaluationArm.SYSTEM_2.name not in current_resume['completed_arms']:
+                selected_arm = EvaluationArm.SYSTEM_2
+            elif EvaluationArm.SYSTEM_2_PERSONA.name not in current_resume['completed_arms']:
+                selected_arm = EvaluationArm.SYSTEM_2_PERSONA
+            elif EvaluationArm.SYSTEM_2_PERSONA_DEBIAS.name not in current_resume['completed_arms']:
+                selected_arm = EvaluationArm.SYSTEM_2_PERSONA_DEBIAS
+            else:
+                # All ARMs completed, show summary
+                st.success("🎉 All evaluations completed!")
+                return
 
             spinner_text = "🤖 AI is analyzing your resume..."
             if selected_arm == EvaluationArm.SYSTEM_2:
                 spinner_text += " (Creating evaluation rubric...)"
             elif selected_arm == EvaluationArm.SYSTEM_2_PERSONA:
                 spinner_text += " (HR Compliance Officer reviewing...)"
+            elif selected_arm == EvaluationArm.SYSTEM_2_PERSONA_DEBIAS:
+                spinner_text += " (Running compliance + debias analysis...)"
 
             with st.spinner(spinner_text):
                 analyzer = GeminiAnalyzer(api_key)
@@ -1022,9 +1033,16 @@ def main():
             # Update ARM scores in the current resume data
             if 'arm_scores' not in current_resume:
                 current_resume['arm_scores'] = {}
-            current_resume['arm_scores'][selected_arm.name] = analysis_result.get('fit_score_1_to_5', 0)
-            if 'evaluation' in analysis_result:
-                current_resume['arm_scores'][selected_arm.name] = analysis_result['evaluation'].get('fit_score_1_to_5', 0)
+            
+            # Extract score based on ARM type
+            if selected_arm == EvaluationArm.SYSTEM_1:
+                # ARM A has score at root level
+                score = analysis_result.get('fit_score_1_to_5', 0)
+            else:
+                # ARM B, C, D have score in evaluation section
+                score = analysis_result.get('evaluation', {}).get('fit_score_1_to_5', 0)
+            
+            current_resume['arm_scores'][selected_arm.name] = score
 
             # Additional resources
             st.markdown("---")
@@ -1059,14 +1077,11 @@ def main():
                 st.success(f"✅ Analysis complete! The next step ({next_arm}) is now available.")
                 st.info(f"Next stage: {next_arm} is now available.")
             else:
+                # All ARMs completed - just show success message, summary will be displayed outside button handler
                 st.success("🎉 Congratulations! You've completed all evaluation ARMs.")
-                st.markdown("---")
-                
-                # Get the actual stored scores from each ARM for current resume
-                score_a = current_resume['arm_scores'].get('SYSTEM_1', 0)
-                score_b = current_resume['arm_scores'].get('SYSTEM_2', 0)
-                score_c = current_resume['arm_scores'].get('SYSTEM_2_PERSONA', 0)
-                score_d = current_resume['arm_scores'].get('SYSTEM_2_PERSONA_DEBIAS', 0)
+                st.info("📈 Scroll down to see your complete evaluation summary with charts!")
+            
+        except Exception as e:
                 
                 # Display current progress
                 st.markdown(f"### 🎯 Evaluation Progress for {current_resume['label']}")
@@ -1110,35 +1125,44 @@ def main():
                 arm_labels = ['ARM A', 'ARM B', 'ARM C', 'ARM D']
                 scores = [score_a, score_b, score_c, score_d]
                 
-                # Create chart data with proper index
-                chart_data = pd.DataFrame({
-                    'Score': scores
-                }, index=arm_labels)
-                
-                # Add metrics to show exact scores
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("ARM A", f"{score_a:.2f}/5")
-                with col2:
-                    st.metric("ARM B", f"{score_b:.2f}/5")
-                with col3:
-                    st.metric("ARM C", f"{score_c:.2f}/5")
-                with col4:
-                    st.metric("ARM D", f"{score_d:.2f}/5")
-                
-                # Display the line chart
-                st.line_chart(
-                    chart_data,
-                    use_container_width=True,
-                    height=400
-                )
-                
-                # Add reference line explanation
-                st.markdown("""
-                <div style="text-align: right; color: gray; font-style: italic; margin-top: 10px; margin-bottom: 20px;">
-                    Maximum Score: 5.0
-                </div>
-                """, unsafe_allow_html=True)
+                # Validate scores
+                if all(isinstance(score, (int, float)) for score in scores):
+                    # Create chart data with proper index
+                    chart_data = pd.DataFrame({
+                        'Score': scores
+                    }, index=arm_labels)
+                    
+                    # Add metrics to show exact scores
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("ARM A", f"{score_a:.2f}/5")
+                    with col2:
+                        st.metric("ARM B", f"{score_b:.2f}/5")
+                    with col3:
+                        st.metric("ARM C", f"{score_c:.2f}/5")
+                    with col4:
+                        st.metric("ARM D", f"{score_d:.2f}/5")
+                    
+                    # Display the line chart
+                    try:
+                        st.line_chart(
+                            chart_data,
+                            use_container_width=True,
+                            height=400
+                        )
+                    except Exception as chart_error:
+                        st.error(f"Error displaying chart: {chart_error}")
+                        st.write("Chart data:", chart_data)
+                        
+                    # Add reference line explanation
+                    st.markdown("""
+                    <div style="text-align: right; color: gray; font-style: italic; margin-top: 10px; margin-bottom: 20px;">
+                        Maximum Score: 5.0
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.error("Invalid score data detected. Chart cannot be displayed.")
+                    st.write("Scores:", scores)
                 
                 # Create downloadable summary
                 st.markdown("---")
@@ -1349,6 +1373,85 @@ def main():
             - Try reducing the text length if it's very long
             - Check your internet connection
             """)
+    
+    # Display summary if all ARMs are completed (outside the button handler)
+    if len(current_resume['completed_arms']) >= 4:
+        st.success("🎉 Congratulations! You've completed all evaluation ARMs.")
+        st.markdown("---")
+        
+        # Get the actual stored scores from each ARM for current resume
+        score_a = current_resume['arm_scores'].get('SYSTEM_1', 0)
+        score_b = current_resume['arm_scores'].get('SYSTEM_2', 0)
+        score_c = current_resume['arm_scores'].get('SYSTEM_2_PERSONA', 0)
+        score_d = current_resume['arm_scores'].get('SYSTEM_2_PERSONA_DEBIAS', 0)
+        
+        # Display current progress
+        st.markdown(f"### 🎯 Final Evaluation Summary for {current_resume['label']}")
+        
+        # Create score progression chart
+        st.markdown("### 📈 Score Progression Chart")
+        
+        # Prepare data for plotting
+        arm_labels = ['ARM A', 'ARM B', 'ARM C', 'ARM D']
+        scores = [score_a, score_b, score_c, score_d]
+        
+        # Validate scores
+        if all(isinstance(score, (int, float)) for score in scores):
+            # Create chart data with proper index
+            chart_data = pd.DataFrame({
+                'Score': scores
+            }, index=arm_labels)
+            
+            # Add metrics to show exact scores
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("ARM A", f"{score_a:.2f}/5")
+            with col2:
+                st.metric("ARM B", f"{score_b:.2f}/5")
+            with col3:
+                st.metric("ARM C", f"{score_c:.2f}/5")
+            with col4:
+                st.metric("ARM D", f"{score_d:.2f}/5")
+            
+            # Display the line chart
+            try:
+                st.line_chart(
+                    chart_data,
+                    use_container_width=True,
+                    height=400
+                )
+                
+                # Add reference line explanation
+                st.markdown("""
+                <div style="text-align: right; color: gray; font-style: italic; margin-top: 10px; margin-bottom: 20px;">
+                    Maximum Score: 5.0
+                </div>
+                """, unsafe_allow_html=True)
+            except Exception as chart_error:
+                st.error(f"Error displaying chart: {chart_error}")
+                st.write("Chart data:", chart_data)
+        else:
+            st.error("Invalid score data detected. Chart cannot be displayed.")
+            st.write("Scores:", scores)
+        
+        # Overall assessment
+        avg_score = sum(scores) / len(scores) if scores else 0
+        variance = max(scores) - min(scores) if scores else 0
+        
+        st.markdown("### 📊 Overall Assessment")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Average Score", f"{avg_score:.2f}/5")
+        with col2:
+            consistency = 'High' if variance < 0.5 else 'Moderate' if variance < 1 else 'Variable'
+            st.metric("Consistency", consistency)
+        with col3:
+            recommendation = ('✅ Strongly Recommended' if avg_score >= 4.5 else
+                            '✅ Recommended' if avg_score >= 4.0 else
+                            '⚠️ Consider with Reservations' if avg_score >= 3.0 else
+                            '❌ Not Recommended')
+            st.metric("Recommendation", recommendation.split(' ', 1)[1])
 
 if __name__ == "__main__":
     main()
