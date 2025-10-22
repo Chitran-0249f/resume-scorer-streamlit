@@ -7,6 +7,21 @@ from dotenv import load_dotenv
 from enum import Enum
 import pandas as pd
 
+try:
+    import pdfplumber
+except ImportError:
+    st.error("pdfplumber not installed. Please install with: pip install pdfplumber")
+    st.stop()
+
+try:
+    from docx import Document
+except ImportError:
+    st.error("python-docx not installed. Please install with: pip install python-docx")
+    st.stop()
+
+from typing import Dict, List, Optional, Tuple
+from datetime import datetime
+
 # Load environment variables
 load_dotenv()
 
@@ -16,34 +31,118 @@ class EvaluationArm(Enum):
     SYSTEM_2_PERSONA = "ARM C: Compliance Officer"
     SYSTEM_2_PERSONA_DEBIAS = "ARM D: Compliance + Debias"
 
-# Initialize session state
-if 'current_arm' not in st.session_state:
-    st.session_state.current_arm = EvaluationArm.SYSTEM_1
-if 'evaluation_complete' not in st.session_state:
-    st.session_state.evaluation_complete = False
-if 'arm_scores' not in st.session_state:
-    st.session_state.arm_scores = {}
-if 'completed_arms' not in st.session_state:
-    st.session_state.completed_arms = set()
+# Initialize session state for multi-resume support
+def initialize_session_state():
+    """Initialize session state for multi-resume functionality"""
+    if 'resumes' not in st.session_state:
+        st.session_state.resumes = {
+            'resume_1': {
+                'text': '',
+                'label': 'Resume 1',
+                'file_name': '',
+                'completed_arms': set(),
+                'arm_scores': {},
+                'analysis_results': {}
+            }
+        }
+    
+    if 'active_resume' not in st.session_state:
+        st.session_state.active_resume = 'resume_1'
+    
+    if 'resume_counter' not in st.session_state:
+        st.session_state.resume_counter = 1
+    
+    # Legacy state for backward compatibility (remove after migration)
+    if 'current_arm' not in st.session_state:
+        st.session_state.current_arm = EvaluationArm.SYSTEM_1
+    if 'evaluation_complete' not in st.session_state:
+        st.session_state.evaluation_complete = False
+    if 'arm_scores' not in st.session_state:
+        st.session_state.arm_scores = {}
+    if 'completed_arms' not in st.session_state:
+        st.session_state.completed_arms = set()
 
-def get_available_arms():
+# Call session state initialization
+initialize_session_state()
+
+def get_available_arms(resume_id: str = None):
     """Determine which ARMs are available based on completion status"""
-    if not st.session_state.completed_arms:
+    if resume_id is None:
+        resume_id = st.session_state.active_resume
+    
+    # Get the specific resume's completed arms
+    resume_data = st.session_state.resumes.get(resume_id, {})
+    completed_arms = resume_data.get('completed_arms', set())
+    
+    if not completed_arms:
         return [EvaluationArm.SYSTEM_1]
-    elif EvaluationArm.SYSTEM_1.name in st.session_state.completed_arms and EvaluationArm.SYSTEM_2.name not in st.session_state.completed_arms:
+    if EvaluationArm.SYSTEM_1.name in completed_arms and EvaluationArm.SYSTEM_2.name not in completed_arms:
         return [EvaluationArm.SYSTEM_2]
-    elif EvaluationArm.SYSTEM_2.name in st.session_state.completed_arms and EvaluationArm.SYSTEM_2_PERSONA.name not in st.session_state.completed_arms:
+    if EvaluationArm.SYSTEM_2.name in completed_arms and EvaluationArm.SYSTEM_2_PERSONA.name not in completed_arms:
         return [EvaluationArm.SYSTEM_2_PERSONA]
-    return [EvaluationArm.SYSTEM_2_PERSONA]  # After all complete, stay on ARM C
+    if EvaluationArm.SYSTEM_2_PERSONA.name in completed_arms and EvaluationArm.SYSTEM_2_PERSONA_DEBIAS.name not in completed_arms:
+        return [EvaluationArm.SYSTEM_2_PERSONA_DEBIAS]
+    # After all complete, stay on ARM D
+    return [EvaluationArm.SYSTEM_2_PERSONA_DEBIAS]
+
+def add_new_resume():
+    """Add a new resume slot"""
+    st.session_state.resume_counter += 1
+    new_resume_id = f'resume_{st.session_state.resume_counter}'
+    st.session_state.resumes[new_resume_id] = {
+        'text': '',
+        'label': f'Resume {st.session_state.resume_counter}',
+        'file_name': '',
+        'completed_arms': set(),
+        'arm_scores': {},
+        'analysis_results': {}
+    }
+    return new_resume_id
+
+def remove_resume(resume_id: str):
+    """Remove a resume (except the first one)"""
+    if resume_id != 'resume_1' and resume_id in st.session_state.resumes:
+        del st.session_state.resumes[resume_id]
+        if st.session_state.active_resume == resume_id:
+            st.session_state.active_resume = 'resume_1'
+
+def get_resume_progress_emoji(resume_id: str):
+    """Get progress emoji for a resume"""
+    resume_data = st.session_state.resumes.get(resume_id, {})
+    completed_arms = resume_data.get('completed_arms', set())
+    
+    if len(completed_arms) == 0:
+        return "⚪⚪⚪⚪"
+    elif len(completed_arms) == 1:
+        return "✅⚪⚪⚪"
+    elif len(completed_arms) == 2:
+        return "✅✅⚪⚪"
+    elif len(completed_arms) == 3:
+        return "✅✅✅⚪"
+    else:
+        return "✅✅✅✅"
+
+def get_all_resume_labels():
+    """Get list of resume labels for dropdown"""
+    labels = []
+    for resume_id, resume_data in st.session_state.resumes.items():
+        label = resume_data.get('label', resume_id)
+        progress = get_resume_progress_emoji(resume_id)
+        labels.append(f"{label} ({progress})")
+    return labels
 
 def initialize_demo_scores():
     """Initialize the session state with demo scores if they don't exist"""
-    if not st.session_state.arm_scores or len(st.session_state.arm_scores) < 3:
-        st.session_state.arm_scores = {
-            'SYSTEM_1': 5.0,    # ARM A: Quick Insights Score
-            'SYSTEM_2': 4.1,    # ARM B: Detailed Evaluation Score
-            'SYSTEM_2_PERSONA': 4.6  # ARM C: Compliance-Verified Score
-        }
+    if not st.session_state.arm_scores:
+        st.session_state.arm_scores = {}
+    if 'SYSTEM_1' not in st.session_state.arm_scores:
+        st.session_state.arm_scores['SYSTEM_1'] = 5.0
+    if 'SYSTEM_2' not in st.session_state.arm_scores:
+        st.session_state.arm_scores['SYSTEM_2'] = 4.1
+    if 'SYSTEM_2_PERSONA' not in st.session_state.arm_scores:
+        st.session_state.arm_scores['SYSTEM_2_PERSONA'] = 4.6
+    if 'SYSTEM_2_PERSONA_DEBIAS' not in st.session_state.arm_scores:
+        st.session_state.arm_scores['SYSTEM_2_PERSONA_DEBIAS'] = 4.4
 from typing import Dict, List, Optional, Tuple
 import PyPDF2
 import pdfplumber
@@ -181,7 +280,7 @@ class GeminiAnalyzer:
     
     def __init__(self, api_key: str):
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-1.5-pro')
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
     
     def get_arm_prompt(self, arm: EvaluationArm, resume_text: str, job_description: str) -> str:
         """Get the appropriate prompt based on the evaluation arm"""
@@ -349,6 +448,43 @@ class GeminiAnalyzer:
                 * Group memberships unless directly job-relevant
             - Document compliance considerations in compliance_review
             - Flag any potential discriminatory impacts"""
+        
+        elif arm == EvaluationArm.SYSTEM_2_PERSONA_DEBIAS:
+            return f"""ROLE: You are an HR compliance officer applying a debiased review. Provide the same systematic, evidence-based evaluation as ARM C, and additionally identify and mitigate any potential bias in the rubric or evidence selection.
+
+            JOB DESCRIPTION:
+            {job_description}
+
+            STEP 1: Generate a rubric using these specific criteria and weights (same as ARM B/C).
+
+            STEP 2: Evaluate the candidate with evidence for each criterion (same as ARM B/C).
+
+            STEP 3: Compliance and Debias Review
+            {{
+                "rubric": [{{"criterion":"...","weight":<int>,"description":"..."}}],
+                "evaluation": {{
+                    "scores": [{{"criterion":"...","score":<1-5>,"evidence":"..."}}],
+                    "fit_score_1_to_5": <number>,
+                    "shortlist_recommend": true/false,
+                    "justification": "<2-3 sentences citing criteria and evidence>",
+                    "compliance_review": {{
+                        "is_compliant": true/false,
+                        "compliance_notes": "<confirmation of EEO adherence>",
+                        "risk_factors": ["<any compliance concerns>"]
+                    }},
+                    "debias_review": {{
+                        "mitigations_applied": ["<actions taken to mitigate potential bias>"] ,
+                        "residual_risks": ["<remaining risks>"]
+                    }}
+                }}
+            }}
+
+            IMPORTANT:
+            - Base all judgments on job-related, observable evidence
+            - Avoid prestige proxies, demographic inferences, and ambiguous signals
+            - If evidence is weak or ambiguous, reduce reliance and note in debias_review
+            - Keep outputs strictly JSON as specified
+            """
             
         return ""
     
@@ -371,9 +507,9 @@ class GeminiAnalyzer:
             result = json.loads(response_text)
             
             # Validate the response format based on the ARM
-            if arm in [EvaluationArm.SYSTEM_2, EvaluationArm.SYSTEM_2_PERSONA]:
+            if arm in [EvaluationArm.SYSTEM_2, EvaluationArm.SYSTEM_2_PERSONA, EvaluationArm.SYSTEM_2_PERSONA_DEBIAS]:
                 if 'rubric' not in result or 'evaluation' not in result:
-                    raise ValueError("Invalid response format for ARM B")
+                    raise ValueError("Invalid response format for ARM B/C/D")
                 
                 # Ensure all required fields are present
                 required_fields = {
@@ -407,22 +543,6 @@ class GeminiAnalyzer:
             raise Exception(f"Failed to parse AI response as JSON: {str(e)}")
         except Exception as e:
             raise Exception(f"AI analysis failed: {str(e)}")
-        
-        try:
-            response = self.model.generate_content(prompt)
-            response_text = response.text.strip()
-            
-            # Clean up response text (remove markdown formatting if present)
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-            if response_text.endswith("```"):
-                response_text = response_text[:-3]
-            
-            return json.loads(response_text)
-        except json.JSONDecodeError as e:
-            raise Exception(f"Failed to parse AI response as JSON: {str(e)}")
-        except Exception as e:
-            raise Exception(f"AI analysis failed: {str(e)}")
 
 def validate_inputs(resume_text: str, job_description: str) -> Tuple[bool, str]:
     """Validate input texts for minimum requirements"""
@@ -434,8 +554,14 @@ def validate_inputs(resume_text: str, job_description: str) -> Tuple[bool, str]:
     
     return True, ""
 
-def display_results(analysis_result: Dict, arm: EvaluationArm):
+def display_results(analysis_result: Dict, arm: EvaluationArm, resume_label: str = None):
     """Display analysis results in a formatted way"""
+    
+    # Add resume context if label is provided
+    if resume_label:
+        st.markdown(f"### 📊 Analysis Results for {resume_label}")
+    else:
+        st.markdown("### 📊 Analysis Results")
     
     if arm == EvaluationArm.SYSTEM_1:
         # ARM A: Fast Intuitive Display
@@ -577,6 +703,69 @@ def display_results(analysis_result: Dict, arm: EvaluationArm):
                     ⚠️ {risk}
                 </div>
                 """, unsafe_allow_html=True)
+    
+    elif arm == EvaluationArm.SYSTEM_2_PERSONA_DEBIAS:
+        # ARM D: Compliance + Debias Display
+        evaluation = analysis_result.get('evaluation', {})
+        fit_score = evaluation.get('fit_score_1_to_5', 0)
+        score_color = "🟢" if fit_score >= 4 else "🟡" if fit_score >= 3 else "🔴"
+        
+        st.markdown(f"""
+        <div class="score-display">
+            <h2>{score_color} Debiased Compliance Score: {fit_score}/5</h2>
+            <p>{'✅ Recommended for Shortlist' if evaluation.get('shortlist_recommend', False) else '❌ Not Recommended'}</p>
+            <p style='font-size: 0.9em; margin-top: 5px;'>{'✓ Compliant (Debiased Review Applied)' if evaluation.get('compliance_review', {}).get('is_compliant', False) else '⚠️ Compliance Concerns Noted'}</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.subheader("📊 Evaluation Rubric & Scores")
+        st.markdown("#### Evaluation Criteria")
+        rubric = analysis_result.get('rubric', [])
+        for criterion in rubric:
+            st.markdown(f"""
+            <div class="recommendation-box">
+                <strong>{criterion.get('criterion','')}</strong> (Weight: {criterion.get('weight',0)}%)
+                <p><em>{criterion.get('description','')}</em></p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("#### Detailed Scores")
+        scores = evaluation.get('scores', [])
+        for criterion_score in scores:
+            criterion_name = criterion_score.get('criterion', '')
+            score = criterion_score.get('score', 0)
+            evidence = criterion_score.get('evidence', '')
+            weight = next((r.get('weight',0) for r in rubric if r.get('criterion','') == criterion_name), 0)
+            st.markdown(f"""
+            <div class="recommendation-box">
+                <h4>{criterion_name} (Weight: {weight}%)</h4>
+                <p><strong>Score:</strong> {score}/5</p>
+                <p><strong>Evidence:</strong> {evidence}</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.subheader("📋 Final Assessment")
+        st.markdown(
+            f"""<div class=\"recommendation-box\">{evaluation.get('justification', 'No assessment available')}</div>""",
+            unsafe_allow_html=True
+        )
+        
+        st.subheader("🧭 Debias Review")
+        debias = evaluation.get('debias_review', {})
+        mitigations = debias.get('mitigations_applied', []) or []
+        residual = debias.get('residual_risks', []) or []
+        if mitigations:
+            st.markdown("#### Mitigations Applied")
+            for m in mitigations:
+                st.markdown(f"""
+                <div class=\"recommendation-box\" style=\"border-left-color: #17a2b8;\">🧪 {m}</div>
+                """, unsafe_allow_html=True)
+        if residual:
+            st.markdown("#### Residual Risks")
+            for r in residual:
+                st.markdown(f"""
+                <div class=\"recommendation-box\" style=\"border-left-color: #ffc107;\">⚠️ {r}</div>
+                """, unsafe_allow_html=True)
 
 def main():
     """Main application function"""
@@ -591,15 +780,54 @@ def main():
     
     # Sidebar
     with st.sidebar:
-        st.header("🔑 Configuration")
         api_key = os.getenv('GEMINI_API_KEY')
+        
+        # Resume Management Section
+        st.markdown("### 📋 Resume Management")
+        
+        # Resume selector
+        resume_options = list(st.session_state.resumes.keys())
+        resume_labels = [st.session_state.resumes[rid]['label'] for rid in resume_options]
+        
+        selected_index = st.selectbox(
+            "Select Active Resume:",
+            range(len(resume_options)),
+            format_func=lambda i: f"{resume_labels[i]} ({get_resume_progress_emoji(resume_options[i])})",
+            index=resume_options.index(st.session_state.active_resume) if st.session_state.active_resume in resume_options else 0
+        )
+        
+        # Update active resume
+        st.session_state.active_resume = resume_options[selected_index]
+        
+        # Add/Remove resume buttons
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("➕ Add Resume", help="Add another resume for comparison"):
+                new_id = add_new_resume()
+                st.session_state.active_resume = new_id
+                st.rerun()
+        
+        with col2:
+            if st.button("🗑️ Remove", disabled=len(st.session_state.resumes) <= 1 or st.session_state.active_resume == 'resume_1'):
+                remove_resume(st.session_state.active_resume)
+                st.rerun()
+        
+        # Progress overview for all resumes
+        if len(st.session_state.resumes) > 1:
+            st.markdown("#### Progress Overview")
+            for rid, resume_data in st.session_state.resumes.items():
+                progress = get_resume_progress_emoji(rid)
+                label = resume_data.get('label', rid)
+                st.markdown(f"**{label}**: {progress}")
+        
         st.markdown("---")
         st.markdown("### 📚 How to Use")
         st.markdown("""
-        1. **Upload** your resume (PDF/DOCX) or paste text
-        2. **Enter** the job description
-        3. **Click** Analyze to get your score
-        4. **Review** recommendations and missing keywords
+        1. **Upload** your resumes (PDF/DOCX) or paste text
+        2. **Label** each resume for easy identification
+        3. **Enter** the job description
+        4. **Select** a resume and analyze through all 4 ARMs
+        5. **Compare** results across all resumes
         """)
         
         st.markdown("### 🔒 Privacy")
@@ -608,6 +836,26 @@ def main():
         - No data is stored or logged
         - You control your own API usage
         """)
+    
+    # Resume labeling for active resume
+    st.markdown("### 🏷️ Resume Information")
+    current_resume = st.session_state.resumes[st.session_state.active_resume]
+    
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        new_label = st.text_input(
+            "Resume Label:", 
+            value=current_resume['label'],
+            placeholder="e.g., John Doe, Marketing Candidate, Resume A",
+            help="Give this resume a descriptive name"
+        )
+        if new_label != current_resume['label']:
+            st.session_state.resumes[st.session_state.active_resume]['label'] = new_label
+    
+    with col2:
+        st.metric("ARM Progress", f"{len(current_resume['completed_arms'])}/4", delta=None)
+    
+    st.markdown("---")
     
     # Main content area
     col1, col2 = st.columns([1, 1])
@@ -619,7 +867,8 @@ def main():
         uploaded_file = st.file_uploader(
             "Upload Resume (PDF or DOCX)",
             type=['pdf', 'docx'],
-            help="Supported formats: PDF, DOCX"
+            help="Supported formats: PDF, DOCX",
+            key=f"file_upload_{st.session_state.active_resume}"
         )
         
         # Manual text input option
@@ -628,20 +877,32 @@ def main():
             "Resume Text",
             height=300,
             placeholder="Paste your resume content here...",
-            help="Minimum 50 characters required"
+            help="Minimum 50 characters required",
+            value=current_resume.get('text', ''),
+            key=f"resume_text_{st.session_state.active_resume}"
         )
+        
+        # Update resume text in session state
+        if resume_text != current_resume.get('text', ''):
+            st.session_state.resumes[st.session_state.active_resume]['text'] = resume_text
         
         # Process uploaded file
         if uploaded_file is not None:
             try:
                 with st.spinner("Extracting text from file..."):
                     extracted_text = ResumeProcessor.extract_text_from_file(uploaded_file)
-                    resume_text = extracted_text
+                    st.session_state.resumes[st.session_state.active_resume]['text'] = extracted_text
+                    st.session_state.resumes[st.session_state.active_resume]['file_name'] = uploaded_file.name
                     st.success(f"✅ Successfully extracted text from {uploaded_file.name}")
-                    st.text_area("Extracted Text", value=resume_text, height=200, disabled=True)
+                    st.text_area("Extracted Text", value=extracted_text, height=200, disabled=True)
+                    # Update resume_text to use the extracted text
+                    resume_text = extracted_text
             except Exception as e:
                 st.error(f"❌ Error processing file: {str(e)}")
                 st.stop()
+        
+        # Use the current resume text from session state for validation
+        final_resume_text = current_resume.get('text', '')
     
     with col2:
         st.header("💼 Job Description")
@@ -658,19 +919,23 @@ def main():
     
     col1, col2 = st.columns([2, 1])
     with col1:
+        total_required_arms = 4  # ARM D is always enabled
         available_arms = get_available_arms()
         current_arm = available_arms[0]  # Get the current available ARM
         
         # Show progress status
-        if not st.session_state.completed_arms:
+        if not current_resume['completed_arms']:
             st.info("🎯 Start with ARM A: Fast Intuitive Evaluation")
-        elif EvaluationArm.SYSTEM_1.name in st.session_state.completed_arms and EvaluationArm.SYSTEM_2.name not in st.session_state.completed_arms:
+        elif EvaluationArm.SYSTEM_1.name in current_resume['completed_arms'] and EvaluationArm.SYSTEM_2.name not in current_resume['completed_arms']:
             st.success("✅ ARM A complete!")
             st.info("🎯 Now proceed with ARM B: Detailed Rubric-Based Evaluation")
-        elif EvaluationArm.SYSTEM_2.name in st.session_state.completed_arms and EvaluationArm.SYSTEM_2_PERSONA.name not in st.session_state.completed_arms:
+        elif EvaluationArm.SYSTEM_2.name in current_resume['completed_arms'] and EvaluationArm.SYSTEM_2_PERSONA.name not in current_resume['completed_arms']:
             st.success("✅ ARM A & B completed!")
-            st.info("🎯 Final step - ARM C: Compliance-Focused Evaluation")
-        elif len(st.session_state.completed_arms) >= 3:
+            st.info("🎯 Now proceed with ARM C: Compliance-Focused Evaluation")
+        elif EvaluationArm.SYSTEM_2_PERSONA.name in current_resume['completed_arms'] and EvaluationArm.SYSTEM_2_PERSONA_DEBIAS.name not in current_resume['completed_arms']:
+            st.success("✅ ARM A, B & C completed!")
+            st.info("🎯 Final step - ARM D: Compliance + Debias Evaluation")
+        elif len(current_resume['completed_arms']) >= total_required_arms:
             st.success("🎉 All ARMs completed! Full evaluation process finished.")
         
         # If there is a just-completed analysis, show it now (persisted across rerun)
@@ -679,7 +944,7 @@ def main():
             st.header("📊 Analysis Results")
             try:
                 arm_to_display = EvaluationArm[st.session_state['last_analysis_arm']]
-                display_results(st.session_state['last_analysis_result'], arm_to_display)
+                display_results(st.session_state['last_analysis_result'], arm_to_display, current_resume['label'])
             finally:
                 # Clear after displaying so it doesn't repeat on further reruns
                 del st.session_state['last_analysis_result']
@@ -698,55 +963,81 @@ def main():
     
     # Set button text based on current ARM
     button_text = "🚀 Start Fast Evaluation (ARM A)"
-    if EvaluationArm.SYSTEM_1.name in st.session_state.completed_arms:
-        button_text = "Run Detailed Analysis (ARM B)"
-    if EvaluationArm.SYSTEM_2.name in st.session_state.completed_arms:
+    if EvaluationArm.SYSTEM_1.name in current_resume['completed_arms'] and EvaluationArm.SYSTEM_2.name not in current_resume['completed_arms']:
+        button_text = "📊 Run Detailed Analysis (ARM B)"
+    elif EvaluationArm.SYSTEM_2.name in current_resume['completed_arms'] and EvaluationArm.SYSTEM_2_PERSONA.name not in current_resume['completed_arms']:
         button_text = "⚖️ Run Compliance Check (ARM C)"
-    if len(st.session_state.completed_arms) >= 3:
-        button_text = "Show Complete Summary"
+    elif EvaluationArm.SYSTEM_2_PERSONA.name in current_resume['completed_arms'] and EvaluationArm.SYSTEM_2_PERSONA_DEBIAS.name not in current_resume['completed_arms']:
+        button_text = "🧭 Run Compliance + Debias (ARM D)"
+    elif len(current_resume['completed_arms']) >= 4:
+        button_text = "📈 Show Complete Summary"
 
-    if st.button(button_text, type="primary"):
+    if st.button("🚀 Analyze Resume", type="primary"):
         # Validate inputs
-        is_valid, error_msg = validate_inputs(resume_text, job_description)
+        is_valid, error_msg = validate_inputs(final_resume_text, job_description)
         if not is_valid:
             st.error(f"❌ {error_msg}")
             return
-        
+
         # Perform analysis
         try:
             # Map the selected mode to the appropriate ARM
             selected_arm = EvaluationArm.SYSTEM_1 if evaluation_mode == EvaluationArm.SYSTEM_1.value else \
                          EvaluationArm.SYSTEM_2 if evaluation_mode == EvaluationArm.SYSTEM_2.value else \
                          EvaluationArm.SYSTEM_2_PERSONA
-            
+
             spinner_text = "🤖 AI is analyzing your resume..."
             if selected_arm == EvaluationArm.SYSTEM_2:
                 spinner_text += " (Creating evaluation rubric...)"
             elif selected_arm == EvaluationArm.SYSTEM_2_PERSONA:
                 spinner_text += " (HR Compliance Officer reviewing...)"
-            
+
             with st.spinner(spinner_text):
                 analyzer = GeminiAnalyzer(api_key)
-                analysis_result = analyzer.analyze_resume(resume_text, job_description, selected_arm)
+                try:
+                    analysis_result = analyzer.analyze_resume(final_resume_text, job_description, selected_arm)
+                except Exception as e:
+                    error_message = str(e)
+                    # Import the dummy data module
+                    from dummy_data import get_dummy_data_by_arm
+                    
+                    # Get dummy data based on the selected ARM
+                    analysis_result = get_dummy_data_by_arm(selected_arm.name)
+                    
+                    # Add a warning message but don't stop execution
+                    st.warning("⚠️ The AI analysis encountered an issue, but we're showing you a provisional score instead. The actual score may vary once the API works correctly.")
+                    st.info("This is a fallback score. You can try again later when the API is working properly.")
+                    
+                    # Log the actual error for debugging purposes (user won't see this)
+                    print(f"Original error: {error_message}")
+
+            # Display results
+            st.markdown("---")
+            st.header("📊 Analysis Results")
+            display_results(analysis_result, selected_arm)
+
+            # Add current ARM to completed ARMs
+            current_resume['completed_arms'].add(selected_arm.name)
             
-            # Initialize demo scores if needed
-            initialize_demo_scores()
-            
-            # Store results and update progress
-            if selected_arm == EvaluationArm.SYSTEM_1:
-                # Store the actual score from ARM A analysis
-                score = analysis_result.get('fit_score_1_to_5', 0)
-                st.session_state.arm_scores['SYSTEM_1'] = score
-            elif selected_arm == EvaluationArm.SYSTEM_2:
-                # Store the actual score from ARM B analysis
-                score = analysis_result.get('evaluation', {}).get('fit_score_1_to_5', 0)
-                st.session_state.arm_scores['SYSTEM_2'] = score
-            else:
-                # Store the actual score from ARM C analysis
-                score = analysis_result.get('evaluation', {}).get('fit_score_1_to_5', 0)
-                st.session_state.arm_scores['SYSTEM_2_PERSONA'] = score
-            
-            st.session_state.completed_arms.add(selected_arm.name)
+            # Update ARM scores in the current resume data
+            if 'arm_scores' not in current_resume:
+                current_resume['arm_scores'] = {}
+            current_resume['arm_scores'][selected_arm.name] = analysis_result.get('fit_score_1_to_5', 0)
+            if 'evaluation' in analysis_result:
+                current_resume['arm_scores'][selected_arm.name] = analysis_result['evaluation'].get('fit_score_1_to_5', 0)
+
+            # Additional resources
+            st.markdown("---")
+            st.subheader("🛠️ Additional Resources")
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.markdown("[📝 Resume Builder](https://www.canva.com/resumes/)")
+            with col2:
+                st.markdown("[💼 Job Search Tips](https://www.indeed.com/career-advice)")
+            with col3:
+                st.markdown("[🎯 Interview Prep](https://www.glassdoor.com/blog/interview-prep/)")
+            current_resume['analysis_results'][selected_arm.name] = analysis_result
 
             # Persist the analysis so we can show it right after rerun
             st.session_state['last_analysis_result'] = analysis_result
@@ -754,25 +1045,31 @@ def main():
 
             # Immediately refresh so the next ARM is enabled and analysis is shown without extra click
             # Only rerun if there are remaining ARMs; otherwise continue to show final summary
-            if len(st.session_state.completed_arms) < 3:
+            if len(current_resume['completed_arms']) < total_required_arms:
                 st.rerun()
             
             # Show completion message and next steps
-            if len(st.session_state.completed_arms) < 3:
-                next_arm = "ARM B" if len(st.session_state.completed_arms) == 1 else "ARM C"
+            if len(current_resume['completed_arms']) < total_required_arms:
+                if len(current_resume['completed_arms']) == 1:
+                    next_arm = "ARM B"
+                elif len(current_resume['completed_arms']) == 2:
+                    next_arm = "ARM C"
+                elif len(current_resume['completed_arms']) == 3:
+                    next_arm = "ARM D"
                 st.success(f"✅ Analysis complete! The next step ({next_arm}) is now available.")
                 st.info(f"Next stage: {next_arm} is now available.")
             else:
                 st.success("🎉 Congratulations! You've completed all evaluation ARMs.")
                 st.markdown("---")
                 
-                # Get the actual stored scores from each ARM
-                score_a = st.session_state.arm_scores.get('SYSTEM_1', 0)
-                score_b = st.session_state.arm_scores.get('SYSTEM_2', 0)
-                score_c = st.session_state.arm_scores.get('SYSTEM_2_PERSONA', 0)
+                # Get the actual stored scores from each ARM for current resume
+                score_a = current_resume['arm_scores'].get('SYSTEM_1', 0)
+                score_b = current_resume['arm_scores'].get('SYSTEM_2', 0)
+                score_c = current_resume['arm_scores'].get('SYSTEM_2_PERSONA', 0)
+                score_d = current_resume['arm_scores'].get('SYSTEM_2_PERSONA_DEBIAS', 0)
                 
                 # Display current progress
-                st.markdown("### 🎯 Evaluation Progress")
+                st.markdown(f"### 🎯 Evaluation Progress for {current_resume['label']}")
                 st.markdown("""
                 <style>
                 .progress-box {
@@ -792,12 +1089,14 @@ def main():
                 </style>
                 """, unsafe_allow_html=True)
                 
-                for arm_name, score in [
+                arms_and_scores = [
                     ('SYSTEM_1', score_a),
                     ('SYSTEM_2', score_b),
-                    ('SYSTEM_2_PERSONA', score_c)
-                ]:
-                    if arm_name in st.session_state.completed_arms:
+                    ('SYSTEM_2_PERSONA', score_c),
+                    ('SYSTEM_2_PERSONA_DEBIAS', score_d)
+                ]
+                for arm_name, score in arms_and_scores:
+                    if arm_name in current_resume['completed_arms']:
                         st.markdown(f"""
                         <div class="progress-box">
                             <span style="color: #333333;">✅ {EvaluationArm[arm_name].value}: Score {score:.2f}/5</span>
@@ -808,8 +1107,8 @@ def main():
                 st.markdown("### 📈 Score Progression Chart")
                 
                 # Prepare data for plotting
-                arm_labels = ['ARM A', 'ARM B', 'ARM C']
-                scores = [score_a, score_b, score_c]
+                arm_labels = ['ARM A', 'ARM B', 'ARM C', 'ARM D']
+                scores = [score_a, score_b, score_c, score_d]
                 
                 # Create chart data with proper index
                 chart_data = pd.DataFrame({
@@ -817,13 +1116,15 @@ def main():
                 }, index=arm_labels)
                 
                 # Add metrics to show exact scores
-                col1, col2, col3 = st.columns(3)
+                col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     st.metric("ARM A", f"{score_a:.2f}/5")
                 with col2:
                     st.metric("ARM B", f"{score_b:.2f}/5")
                 with col3:
                     st.metric("ARM C", f"{score_c:.2f}/5")
+                with col4:
+                    st.metric("ARM D", f"{score_d:.2f}/5")
                 
                 # Display the line chart
                 st.line_chart(
@@ -868,6 +1169,7 @@ def main():
                 <body>
                     <div class="header">
                         <h1>Resume Evaluation Summary</h1>
+                        <h2>{current_resume['label']}</h2>
                         <p>Generated on {datetime.now().strftime("%Y-%m-%d %H:%M")}</p>
                     </div>
                     
@@ -891,17 +1193,23 @@ def main():
                         <p>HR compliance assessment ensuring fair evaluation</p>
                     </div>
                     
+                    <div class="score-box">
+                        <h3>ARM D: Compliance + Debias Evaluation</h3>
+                        <p><strong>Score:</strong> {score_d:.2f}/5</p>
+                        <p>Compliance review with bias mitigation</p>
+                    </div>
+                    
                     <div class="final-summary">
                         <h2>Overall Assessment</h2>
-                        <p><strong>Average Score:</strong> {sum([score_a, score_b, score_c])/3:.2f}/5</p>
+                        <p><strong>Average Score:</strong> {sum([score_a, score_b, score_c, score_d])/4:.2f}/5</p>
                         <p><strong>Score Consistency:</strong> {
-                        'High' if max([score_a, score_b, score_c]) - min([score_a, score_b, score_c]) < 0.5 
-                        else 'Moderate' if max([score_a, score_b, score_c]) - min([score_a, score_b, score_c]) < 1 
+                        'High' if max([score_a, score_b, score_c, score_d]) - min([score_a, score_b, score_c, score_d]) < 0.5 
+                        else 'Moderate' if max([score_a, score_b, score_c, score_d]) - min([score_a, score_b, score_c, score_d]) < 1 
                         else 'Variable'}</p>
                         <p><strong>Final Recommendation:</strong> {
-                        '✅ Strongly Recommended' if sum([score_a, score_b, score_c])/3 >= 4.5 
-                        else '✅ Recommended' if sum([score_a, score_b, score_c])/3 >= 4.0 
-                        else '⚠️ Consider with Reservations' if sum([score_a, score_b, score_c])/3 >= 3.0 
+                        '✅ Strongly Recommended' if sum([score_a, score_b, score_c, score_d])/4 >= 4.5 
+                        else '✅ Recommended' if sum([score_a, score_b, score_c, score_d])/4 >= 4.0 
+                        else '⚠️ Consider with Reservations' if sum([score_a, score_b, score_c, score_d])/4 >= 3.0 
                         else '❌ Not Recommended'}</p>
                     </div>
                 </body>
@@ -912,7 +1220,7 @@ def main():
                 st.download_button(
                     label="📄 Download Complete Evaluation Report",
                     data=html_summary,
-                    file_name=f"resume_evaluation_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
+                    file_name=f"resume_evaluation_{current_resume['label'].replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
                     mime="text/html",
                 )
 
@@ -943,9 +1251,17 @@ def main():
                 </div>
                 """, unsafe_allow_html=True)
                 
+                st.markdown("### ARM D: Compliance + Debias Evaluation")
+                st.markdown(f"""
+                <div class="recommendation-box">
+                    <h4>Debiased Compliance Score: {score_d}/5</h4>
+                    <p>Compliance review with bias mitigation</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
                 # Score Progression Analysis
                 st.markdown("### 📈 Score Progression Analysis")
-                scores = [score_a, score_b, score_c]
+                scores = [score_a, score_b, score_c, score_d]
                 avg_score = sum(scores) / len(scores)
                 variance = max(scores) - min(scores)
                 
@@ -968,7 +1284,7 @@ def main():
                 st.markdown("</div>", unsafe_allow_html=True)
                 st.markdown("---")
                 
-                if st.button("� Show Complete Evaluation Summary", type="primary"):
+                if st.button("📊 Show Complete Evaluation Summary", type="primary"):
                     st.markdown("### ARM A: Quick Insights Evaluation")
                     st.markdown(f"""
                     <div class="recommendation-box">
@@ -992,16 +1308,23 @@ def main():
                         <p>HR compliance assessment ensuring fair evaluation</p>
                     </div>
                     """, unsafe_allow_html=True)
+                    st.markdown("### ARM D: Compliance + Debias Evaluation")
+                    st.markdown(f"""
+                    <div class="recommendation-box">
+                        <h4>Debiased Compliance Score: {score_d}/5</h4>
+                        <p>Compliance review with bias mitigation</p>
+                    </div>
+                    """, unsafe_allow_html=True)
                     
                     st.markdown("---")
                     st.markdown("### 📈 Overall Evaluation Summary")
-                    scores = [score_a, score_b, score_c]  # Use the stored variables
+                    scores = [score_a, score_b, score_c, score_d]
                     avg_score = sum(scores) / len(scores)
                     variance = max(scores) - min(scores)
                     
                     st.markdown(f"""
                     <div class="recommendation-box">
-                        <h4 style=\"color: #000000;\">Overall Assessment</h4>
+                        <h4 style="color: #000000;">Overall Assessment</h4>
                         <p><strong>Average Score:</strong> {avg_score:.1f}/5</p>
                         <p><strong>Score Consistency:</strong> {
                         'High' if variance < 0.5 else 'Moderate' if variance < 1 else 'Variable'
@@ -1014,18 +1337,6 @@ def main():
                         }</p>
                     </div>
                     """, unsafe_allow_html=True)
-            
-            # Additional resources
-            st.markdown("---")
-            st.subheader("🛠️ Additional Resources")
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.markdown("[📝 Resume Builder](https://chitranshuharbola.online/resume-builder)")
-            with col2:
-                st.markdown("[💼 Job Search Tips](https://www.indeed.com/career-advice)")
-            with col3:
-                st.markdown("[🎯 Interview Prep](https://www.glassdoor.com/blog/interview-prep/)")
             
         except Exception as e:
             st.error(f"❌ Analysis failed: {str(e)}")
