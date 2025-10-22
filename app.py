@@ -1417,7 +1417,7 @@ def main():
             try:
                 st.line_chart(
                     chart_data,
-                    use_container_width=True,
+                    width="stretch",
                     height=400
                 )
                 
